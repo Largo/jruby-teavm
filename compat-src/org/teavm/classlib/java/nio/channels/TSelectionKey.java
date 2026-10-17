@@ -1,0 +1,54 @@
+package org.teavm.classlib.java.nio.channels;
+
+/** compat: java.nio.channels.SelectionKey (missing in TeaVM 0.16.0). */
+public abstract class TSelectionKey {
+    public static final int OP_READ = 1;
+    public static final int OP_WRITE = 4;
+    public static final int OP_CONNECT = 8;
+    public static final int OP_ACCEPT = 16;
+
+    private Object attachment;
+
+    protected TSelectionKey() {
+    }
+
+    public abstract TSelectableChannel channel();
+
+    public abstract TSelector selector();
+
+    public abstract boolean isValid();
+
+    public abstract void cancel();
+
+    public abstract int interestOps();
+
+    public abstract TSelectionKey interestOps(int ops);
+
+    public abstract int readyOps();
+
+    public final boolean isReadable() {
+        return (readyOps() & OP_READ) != 0;
+    }
+
+    public final boolean isWritable() {
+        return (readyOps() & OP_WRITE) != 0;
+    }
+
+    public final boolean isConnectable() {
+        return (readyOps() & OP_CONNECT) != 0;
+    }
+
+    public final boolean isAcceptable() {
+        return (readyOps() & OP_ACCEPT) != 0;
+    }
+
+    public final Object attach(Object ob) {
+        Object old = attachment;
+        attachment = ob;
+        return old;
+    }
+
+    public final Object attachment() {
+        return attachment;
+    }
+}

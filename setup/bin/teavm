@@ -1,0 +1,13 @@
+#!/bin/bash
+# teavm: TeaVM 0.16.0 command-line compiler (org.teavm.cli.TeaVMRunner), no Gradle needed.
+#   teavm my.Main -t js      -d outdir -f app.js   -p classes dep1.jar dep2.jar
+#   teavm my.Main -t wasm-gc -d outdir -f app.wasm -p classes dep1.jar
+# GOTCHA: -p takes MANY values (space separated, NOT colon separated) and greedily eats
+#   following plain words, so put the main class BEFORE -p (or put another option after -p).
+# The TeaVM classlib/JSO jars in jars/teavm/lib are added to -p automatically.
+# JVM heap: TEAVM_XMX (default 6g). Extra JVM opts: TEAVM_JAVA_OPTS.
+# wasm-gc: the CLI does NOT write the JS loader; copy jars/teavm/wasm-gc-runtime/teavm-wasm-gc-runtime.min.js (== Gradle *.wasm-runtime.js)
+#   next to the .wasm and load it like hello-teavm/web/wasm.html does.
+here=$(cd "$(dirname "$0")/.." && pwd)
+libs=("$here"/jars/teavm/lib/*.jar)
+exec java -Xmx${TEAVM_XMX:-6g} ${TEAVM_JAVA_OPTS} -cp "$here/jars/teavm/lib/*" org.teavm.cli.TeaVMRunner "$@" -p "${libs[@]}"

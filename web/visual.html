@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ruby driving Java libraries in the browser (JRuby + TeaVM)</title>
+<style>
+  :root { --bg:#fafaf7; --fg:#1d1d1b; --muted:#6b6b66; --accent:#b3261e; --panel:#fff; --border:#ddd9cf; --chip:#f1efe8; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#1b1b19; --fg:#ecebe6; --muted:#a3a29b; --accent:#f28b82; --panel:#262624; --border:#3a3936; --chip:#302f2c; } }
+  [hidden] { display:none !important; }
+  body { margin:0; padding:1.5rem 1rem; background:var(--bg); color:var(--fg); font:15px/1.45 system-ui, sans-serif; }
+  main { max-width: 80rem; margin: 0 auto; }
+  h1 { font-size:1.3rem; margin:0 0 .25rem; }
+  p.sub { margin:0 0 1rem; color:var(--muted); max-width: 62rem; }
+  a { color: var(--accent); }
+  .grid { display:grid; grid-template-columns: minmax(0, 1fr); gap: 1rem; align-items:start; }
+  @media (min-width: 70rem) { .grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); } }
+  canvas { display:block; width:100%; height:auto; border-radius:6px; border:1px solid var(--border); background:#f6f3ea; touch-action:none; cursor:crosshair; }
+  textarea, pre { width:100%; box-sizing:border-box; font:12.5px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+    background:var(--panel); color:var(--fg); border:1px solid var(--border); border-radius:6px; padding:.6rem .7rem; }
+  textarea { height: 36rem; resize: vertical; tab-size: 2; white-space: pre; overflow: auto; }
+  pre { min-height: 3rem; white-space: pre-wrap; overflow-x:auto; margin:.6rem 0 0; }
+  .row { display:flex; gap:.6rem; align-items:center; flex-wrap:wrap; margin:.6rem 0 0; }
+  .presets { display:flex; gap:.4rem; flex-wrap:wrap; margin:0 0 .8rem; }
+  .presets button { background:var(--chip); color:var(--fg); border-color:var(--border); padding:.3rem .8rem; }
+  .presets button[aria-pressed="true"] { border-color:var(--accent); font-weight:600; }
+  button { font:inherit; padding:.4rem 1rem; border-radius:6px; border:1px solid var(--accent); background:var(--accent); color:#fff; cursor:pointer; }
+  button:disabled { opacity:.5; cursor:default; }
+  label.field { display:flex; gap:.5rem; align-items:center; margin:0 0 .6rem; flex-wrap:wrap; }
+  label.field input { flex:1 1 16rem; min-width:0; font:inherit; padding:.35rem .55rem; border-radius:6px; border:1px solid var(--border); background:var(--panel); color:var(--fg); }
+  #status, #stats { color:var(--muted); font-size:.9rem; }
+  #stats { margin:.4rem 0 0; min-height:1.3em; }
+  .err { color: var(--accent); }
+  details { margin:1rem 0 0; color:var(--muted); }
+  details p { color:var(--fg); max-width: 62rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Ruby driving real Java libraries, in your browser</h1>
+  <p class="sub">The Ruby code next to the canvas runs in JRuby, compiled to JavaScript with TeaVM. It uses two
+    unmodified Java libraries from Maven Central, compiled into the same <code>jruby.js</code>:
+    <a href="https://github.com/jbox2d/jbox2d">JBox2D</a> (the Java port of the Box2D physics engine) and
+    <a href="https://github.com/zxing/zxing">ZXing</a> (QR codes), and it draws through
+    <code>demo.Canvas2D</code>, a small Java class over the canvas. CRuby and ruby.wasm cannot load Java libraries.
+    Edit the code and run it again with Ctrl+Enter.
+    <a href="./">Plain Ruby REPL</a> &middot; <a href="java.html">More Ruby calling Java</a></p>
+  <div class="presets" id="presets"></div>
+  <div class="grid">
+    <section>
+      <label class="field" id="qr-field" hidden>Text for the QR code
+        <input id="qr-text" value="https://www.jruby.org/ Grüezi from JRuby in the browser" spellcheck="false"></label>
+      <canvas id="stage" width="640" height="420"></canvas>
+      <div id="stats" aria-live="polite"></div>
+      <pre id="out" aria-live="polite"></pre>
+    </section>
+    <section>
+      <textarea id="code" spellcheck="false" wrap="off" aria-label="Ruby code"></textarea>
+      <div class="row"><button id="run" disabled>Run</button><span id="status">loading jruby.js...</span></div>
+    </section>
+  </div>
+  <details><summary>How this works</summary>
+    <p>The jars of JBox2D 2.2.1.1 (BSD-2-Clause) and ZXing core 3.5.4 (Apache-2.0) go through the same TeaVM build as
+      JRuby. The classes listed in <code>java-classes.txt</code> get reflection metadata, so JRuby's Java integration
+      can call them from Ruby: <code>World.new(Vec2.new(0, -10))</code>, Ruby blocks as Java interfaces, Ruby objects
+      stored in Java fields. <code>canvas.animate { }</code> runs its block once per <code>requestAnimationFrame</code>,
+      on a green thread of its own, and clicks reach the <code>on_click</code> block on that thread between two
+      frames. Each frame of the physics demo is Ruby code: one <code>world.step</code> into JBox2D, then a Ruby loop
+      over all bodies that reads each position and draws it, seven or eight Ruby-to-Java calls per body.</p>
+  </details>
+</main>
+<script type="module">
+  const presets = {
+    'Physics (JBox2D)': { hint: 'Click the canvas to drop a box.', code: `# Ruby builds a JBox2D world (a Java library), steps it on every
+# animation frame and draws all bodies on the canvas.
+java_import org.jbox2d.common.Vec2
+java_import org.jbox2d.dynamics.World
+java_import org.jbox2d.dynamics.BodyDef
+java_import org.jbox2d.dynamics.BodyType
+java_import org.jbox2d.collision.shapes.PolygonShape
+java_import org.jbox2d.collision.shapes.CircleShape
+
+canvas = Java::Demo::Canvas2D.new("stage") # 640 x 420 pixels
+SCALE = 20.0                               # pixels per metre; y points up
+world = World.new(Vec2.new(0, -10))        # gravity in m/s²
+Look = Struct.new(:color, :w, :h, :r)      # how Ruby draws a body
+
+def add(world, shape, x, y, look, type = BodyType::DYNAMIC)
+  definition = BodyDef.new
+  definition.type = type                   # Java fields are Ruby accessors
+  definition.position.set(x, y)
+  body = world.create_body(definition)
+  body.create_fixture(shape, 1.0).restitution = 0.25 # density 1, bouncy
+  body.user_data = look                    # a Ruby object in a Java field
+end
+
+def box(world, x, y, w, h, color, type = BodyType::DYNAMIC)
+  shape = PolygonShape.new
+  shape.set_as_box(w / 2.0, h / 2.0)
+  add(world, shape, x, y, Look.new(color, w, h, nil), type)
+end
+
+def ball(world, x, y, r, color)
+  shape = CircleShape.new
+  shape.radius = r
+  add(world, shape, x, y, Look.new(color, nil, nil, r))
+end
+
+wall = "#4a4a46"
+box(world, 16, 0.5, 32, 1, wall, BodyType::STATIC)  # floor and walls
+[0.25, 31.75].each { |x| box(world, x, 10, 0.5, 20, wall, BodyType::STATIC) }
+colors = %w[#e4572e #f3a712 #2a9d8f #264653 #8ab17d #e9c46a #6d597a #b56576]
+8.times do |row|                           # a pyramid of 36 boxes
+  (8 - row).times do |i|
+    box(world, 12.15 + row * 0.55 + i * 1.1, 1.5 + row, 1, 1, colors[row])
+  end
+end
+8.times do |i|                             # balls falling in
+  ball(world, 3 + i * 3.6, 17 + i * 1.5, 0.45 + i * 0.04, "#e76f51")
+end
+ball(world, 16.6, 34, 1.4, "#1d3557")      # and a big one, a bit later
+
+height = canvas.height
+canvas.on_click do |x, y|                  # canvas pixels -> metres
+  box(world, x / SCALE, (height - y) / SCALE, 1.2, 1.2, colors.sample)
+end
+
+canvas.animate do                          # once per animation frame
+  world.step(1.0 / 60, 8, 3)               # JBox2D: 1/60 s of physics
+  canvas.clear("#f6f3ea")
+  body = world.body_list
+  while body                               # walk JBox2D's list of bodies
+    pos, look = body.position, body.user_data
+    x, y = pos.x * SCALE, height - pos.y * SCALE
+    canvas.color = look.color
+    if look.r
+      canvas.fill_circle(x, y, look.r * SCALE)
+    else
+      canvas.fill_box(x, y, look.w * SCALE, look.h * SCALE, -body.angle)
+    end
+    body = body.next
+  end
+  canvas.color = wall
+  canvas.text("#{world.body_count} bodies, #{canvas.fps.round} fps", 18, 24)
+end
+puts "#{world.body_count} bodies, animated on a thread of their own"` },
+
+    'QR code (ZXing)': { input: true, code: `# Ruby asks ZXing (a Java library) for a QR code of the text above,
+# draws it, then decodes it again with ZXing's QRCodeReader.
+java_import com.google.zxing.BarcodeFormat
+java_import com.google.zxing.EncodeHintType
+java_import com.google.zxing.BinaryBitmap
+java_import com.google.zxing.RGBLuminanceSource
+java_import com.google.zxing.common.HybridBinarizer
+java_import com.google.zxing.qrcode.QRCodeWriter
+java_import com.google.zxing.qrcode.QRCodeReader
+java_import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
+
+text = Java::Demo::Page.value("qr-text")   # the input box above
+text = "JRuby" if text.empty?
+hints = { EncodeHintType::CHARACTER_SET => "UTF-8",
+          EncodeHintType::ERROR_CORRECTION => ErrorCorrectionLevel::M }
+matrix = QRCodeWriter.new.encode(text, BarcodeFormat::QR_CODE, 0, 0, hints)
+n = matrix.width                  # modules per side, with a 4-module margin
+dark = Array.new(n) { |y| Array.new(n) { |x| matrix.get(x, y) } }
+
+canvas = Java::Demo::Canvas2D.new("stage")
+width, height = canvas.width, canvas.height
+cell = (height - 50) / n                   # pixels per module
+left, top = (width - n * cell) / 2, 8
+canvas.clear("#ffffff")
+canvas.color = "#111111"
+dark.each_with_index do |row, y|
+  row.each_with_index do |on, x|
+    canvas.fill_rect(left + x * cell, top + y * cell, cell, cell) if on
+  end
+end
+
+# Decode it back: a LuminanceSource over the BitMatrix, 3 x 3 pixels a module
+scale = 3
+pixels = dark.flat_map do |row|
+  row.flat_map { |on| [on ? 0x000000 : 0xFFFFFF] * scale } * scale
+end
+source = RGBLuminanceSource.new(n * scale, n * scale, pixels.to_java(:int))
+result = QRCodeReader.new.decode(BinaryBitmap.new(HybridBinarizer.new(source)))
+
+canvas.color = "#d62828"           # the patterns the decoder located
+result.result_points.each do |point|
+  x, y = point.x / scale, point.y / scale  # in modules
+  canvas.fill_circle(left + x * cell, top + y * cell, cell * 0.45)
+end
+ok = result.text == text
+canvas.color = ok ? "#2f7d4f" : "#b3261e"
+canvas.text_align = "center"
+canvas.text("decoded back: #{result.text}", width / 2, height - 16)
+puts "QR version #{(n - 25) / 4}: #{n - 8} x #{n - 8} modules, " \\
+     "#{text.bytesize} bytes of UTF-8, " \\
+     "error correction #{hints[EncodeHintType::ERROR_CORRECTION]}"
+puts "decoded back: #{result.text}", ok ? "round trip OK" : "round trip FAILED"` },
+  };
+
+  const $ = (id) => document.getElementById(id);
+  const status = (m) => { $('status').textContent = m; };
+  const stage = $('stage');
+  let api, current = Object.keys(presets)[0], runs = 0, running = false, again = false;
+  const evalAsync = (code) => new Promise((resolve) => api.rubyEvalAsync(code, (json) => resolve(JSON.parse(json))));
+
+  function select(name, runNow) {
+    current = name;
+    for (const b of $('presets').children) b.setAttribute('aria-pressed', String(b.dataset.name === name));
+    $('code').value = presets[name].code;
+    $('qr-field').hidden = !presets[name].input;
+    $('stats').textContent = '';
+    if (runNow && api) run();
+  }
+  for (const name of Object.keys(presets)) {
+    const b = document.createElement('button');
+    b.textContent = name;
+    b.dataset.name = name;
+    b.onclick = () => select(name, true);
+    $('presets').append(b);
+  }
+  const wanted = new URLSearchParams(location.search).get('preset');
+  select(Object.keys(presets).find((n) => wanted && n.toLowerCase().includes(wanted.toLowerCase())) || current, false);
+
+  // errors raised inside canvas.animate / on_click blocks arrive as DOM events (they happen after the run returned)
+  stage.addEventListener('rubyerror', (e) => {
+    const s = document.createElement('span'); s.className = 'err'; s.textContent = '\n' + e.detail; $('out').append(s);
+    window.__visualError = e.detail;
+  });
+  stage.addEventListener('canvasstats', (e) => {
+    const d = e.detail, hint = presets[current].hint;
+    $('stats').textContent = `${d.fps} fps, ${d.frameMs} ms of Ruby + Java per frame` + (hint ? '. ' + hint : '');
+  });
+
+  async function run() {
+    if (running) { again = true; return; }             // e.g. typing in the QR text box while a run is busy
+    running = true;
+    const t = performance.now();
+    stage.dataset.run = String(++runs);                // ends the animation of the previous run
+    $('stats').textContent = presets[current].hint || '';
+    $('run').disabled = true;
+    status('running...');
+    const r = await evalAsync($('code').value);
+    $('run').disabled = false;
+    const out = $('out');
+    out.textContent = r.out;
+    if (r.error) {
+      const e = document.createElement('span'); e.className = 'err'; e.textContent = r.error; out.append(e);
+    }
+    window.__lastRun = { preset: current, ms: Math.round(performance.now() - t), ...r };
+    status((window.__jrubyBootMs ? 'ready in ' + window.__jrubyBootMs + ' ms, ' : '') + 'ran in ' + Math.round(performance.now() - t) + ' ms');
+    running = false;
+    if (again) { again = false; return run(); }
+    return r;
+  }
+  // for automation (test/screenshots.js): run the code in the editor, pick a preset by part of its name, eval Ruby
+  window.visualRun = run;
+  window.visualSelect = (part) => select(Object.keys(presets).find((n) => n.toLowerCase().includes(part.toLowerCase())), true);
+  window.jrubyEval = (code) => evalAsync(code);
+
+  let typing;
+  $('qr-text').addEventListener('input', () => { clearTimeout(typing); typing = setTimeout(() => { if (api) run(); }, 250); });
+
+  try {
+    Error.stackTraceLimit = 60;
+    const t0 = performance.now();
+    api = await import('./jruby.js');
+    api.main([]);
+    status('loading stdlib.zip...');
+    api.mountZip(new Int8Array(await (await fetch('stdlib.zip')).arrayBuffer()), '/jruby');
+    status('booting JRuby...');
+    const desc = JSON.parse(await new Promise((resolve) => api.bootAsync(resolve))).description;
+    status('loading the Java integration...');
+    // the snippets are meant to be edited and run again: no "already initialized constant" warnings
+    await evalAsync("require 'java'; $VERBOSE = nil");
+    window.__jrubyBootMs = Math.round(performance.now() - t0);
+    status(desc + ' (ready in ' + window.__jrubyBootMs + ' ms)');
+    $('run').disabled = false;
+    $('run').onclick = () => run();
+    $('code').addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); run(); } });
+    window.__jrubyReady = true;
+    console.log('jruby ready: ' + desc);
+    if (!new URLSearchParams(location.search).has('norun')) await run();
+    window.__done = true;
+  } catch (e) {
+    status('failed: ' + e);
+    console.error(e);
+    window.__jrubyError = String(e);
+    window.__done = true;
+  }
+</script>
+</body>
+</html>

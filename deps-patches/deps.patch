@@ -1,0 +1,366 @@
+--- a/jnr/constants/ConstantSet.java
++++ b/jnr/constants/ConstantSet.java
+@@ -51,36 +51,8 @@
+             LOADER = ClassLoader.getSystemClassLoader();
+         }
+ 
++        // TEAVM: no ClassLoader.getResource; constant enums are found through a static table below
+         boolean canLoadResources = false;
+-        try {
+-            URL thisClass = AccessController.doPrivileged(new PrivilegedAction<URL>() {
+-                public URL run() {
+-                    return LOADER.getResource("jnr/constants/ConstantSet.class");
+-                }
+-            });
+-
+-            InputStream stream = thisClass.openStream();
+-
+-            try {
+-                stream.read();
+-            } catch (Throwable t) {
+-                // save for future reporting, can't read the stream for whatever reason
+-                RESOURCE_READ_ERROR = t;
+-            } finally {
+-                try {
+-                    stream.close();
+-                } catch (Exception e) {
+-                    // ignore
+-                }
+-            }
+-
+-            canLoadResources = true;
+-        } catch (Throwable t) {
+-            if (RESOURCE_READ_ERROR == null) {
+-                RESOURCE_READ_ERROR = t;
+-            }
+-        }
+-
+         CAN_LOAD_RESOURCES = canLoadResources;
+     }
+ 
+@@ -123,29 +95,48 @@
+      */
+     @SuppressWarnings("unchecked")
+     private static final Class<Enum> getEnumClass(String name) {
+-        String[] prefixes = PlatformConstants.getPlatform().getPackagePrefixes();
+-
+-        for (String prefix : prefixes) {
+-            String fullName = prefix + "." + name;
+-            boolean doClass = true;
+-
+-            if (CAN_LOAD_RESOURCES) {
+-                // Reduce exceptions on boot by trying to find the class as a resource first
+-                String path = fullName.replace('.', '/') + ".class";
+-                URL resource = LOADER.getResource(path);
+-
+-                // Able to load resources, but couldn't find this, bail out
+-                if (resource == null) doClass = false;
+-            }
+-
+-            if (doClass) {
+-                try {
+-                    return (Class<Enum>) Class.forName(fullName, true, LOADER).asSubclass(Enum.class);
+-                } catch (ClassNotFoundException ex) {
+-                }
+-            }
++        // TEAVM: no Class.forName on computed names; the browser build always reports Linux constants
++        switch (name) {
++            case "Access": return (Class) jnr.constants.platform.linux.Access.class;
++            case "AddressFamily": return (Class) jnr.constants.platform.linux.AddressFamily.class;
++            case "AddressInfo": return (Class) jnr.constants.platform.linux.AddressInfo.class;
++            case "Confstr": return (Class) jnr.constants.platform.linux.Confstr.class;
++            case "Errno": return (Class) jnr.constants.platform.linux.Errno.class;
++            case "ErrnoAddressInfo": return (Class) jnr.constants.platform.linux.ErrnoAddressInfo.class;
++            case "Fcntl": return (Class) jnr.constants.platform.linux.Fcntl.class;
++            case "INAddr": return (Class) jnr.constants.platform.linux.INAddr.class;
++            case "INet": return (Class) jnr.constants.platform.linux.INet.class;
++            case "INet6": return (Class) jnr.constants.platform.linux.INet6.class;
++            case "IP": return (Class) jnr.constants.platform.linux.IP.class;
++            case "IPProto": return (Class) jnr.constants.platform.linux.IPProto.class;
++            case "IPv6": return (Class) jnr.constants.platform.linux.IPv6.class;
++            case "InterfaceInfo": return (Class) jnr.constants.platform.linux.InterfaceInfo.class;
++            case "LangInfo": return (Class) jnr.constants.platform.linux.LangInfo.class;
++            case "Local": return (Class) jnr.constants.platform.linux.Local.class;
++            case "Locale": return (Class) jnr.constants.platform.linux.Locale.class;
++            case "Multicast": return (Class) jnr.constants.platform.linux.Multicast.class;
++            case "NameInfo": return (Class) jnr.constants.platform.linux.NameInfo.class;
++            case "OpenFlags": return (Class) jnr.constants.platform.linux.OpenFlags.class;
++            case "PRIO": return (Class) jnr.constants.platform.linux.PRIO.class;
++            case "Pathconf": return (Class) jnr.constants.platform.linux.Pathconf.class;
++            case "PosixFadvise": return (Class) jnr.constants.platform.linux.PosixFadvise.class;
++            case "ProtocolFamily": return (Class) jnr.constants.platform.linux.ProtocolFamily.class;
++            case "RLIM": return (Class) jnr.constants.platform.linux.RLIM.class;
++            case "RLIMIT": return (Class) jnr.constants.platform.linux.RLIMIT.class;
++            case "Shutdown": return (Class) jnr.constants.platform.linux.Shutdown.class;
++            case "Signal": return (Class) jnr.constants.platform.linux.Signal.class;
++            case "Sock": return (Class) jnr.constants.platform.linux.Sock.class;
++            case "SocketControlMessage": return (Class) jnr.constants.platform.linux.SocketControlMessage.class;
++            case "SocketLevel": return (Class) jnr.constants.platform.linux.SocketLevel.class;
++            case "SocketMessage": return (Class) jnr.constants.platform.linux.SocketMessage.class;
++            case "SocketOption": return (Class) jnr.constants.platform.linux.SocketOption.class;
++            case "Sysconf": return (Class) jnr.constants.platform.linux.Sysconf.class;
++            case "Syslog": return (Class) jnr.constants.platform.linux.Syslog.class;
++            case "TCP": return (Class) jnr.constants.platform.linux.TCP.class;
++            case "UDP": return (Class) jnr.constants.platform.linux.UDP.class;
++            case "WaitFlags": return (Class) jnr.constants.platform.linux.WaitFlags.class;
++            default: return null;
+         }
+-        return null;
+     }
+ 
+     /**
+--- a/jnr/posix/JavaFileStat.java
++++ b/jnr/posix/JavaFileStat.java
+@@ -6,18 +6,14 @@
+ import java.nio.file.LinkOption;
+ import java.nio.file.Path;
+ import java.nio.file.attribute.BasicFileAttributes;
+-import java.nio.file.attribute.DosFileAttributes;
+ import java.nio.file.attribute.FileTime;
+-import java.nio.file.attribute.PosixFileAttributes;
+-import java.nio.file.attribute.PosixFilePermission;
+ import java.util.Set;
+ 
+ public class JavaFileStat extends AbstractJavaFileStat {
+     short st_mode;
+ 
+     BasicFileAttributes attrs;
+-    PosixFileAttributes posixAttrs;
+-    DosFileAttributes dosAttrs;
++    // TEAVM: no PosixFileAttributes/DosFileAttributes (nor File.toPath) in TeaVM's class library
+     
+     public JavaFileStat(POSIX posix, POSIXHandler handler) {
+         super(posix, handler);
+@@ -25,26 +21,7 @@
+     
+     public void setup(String filePath) {
+         File file = new JavaSecuredFile(filePath);
+-        Path path = file.toPath();
+-
+-        try {
+-            try {
+-                // try POSIX
+-                posixAttrs = Files.readAttributes(path, PosixFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+-                attrs = posixAttrs;
+-            } catch (UnsupportedOperationException uoe) {
+-                try {
+-                    // try DOS
+-                    dosAttrs = Files.readAttributes(path, DosFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+-                    attrs = dosAttrs;
+-                } catch (UnsupportedOperationException uoe2) {
+-                    attrs = Files.readAttributes(path, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+-                }
+-            }
+-        } catch (IOException ioe) {
+-            // fall back on pre-NIO2 logic
+-            attrs = new PreNIO2FileAttributes(file);
+-        }
++        attrs = new PreNIO2FileAttributes(file); // TEAVM: java.io.File based attributes only
+ 
+         // Simulated mode value
+         st_mode = calculateMode(file, (short) 0);
+@@ -140,15 +117,7 @@
+             st_mode |= S_IFREG;
+         }
+ 
+-        if (posixAttrs != null && posixAttrs.isSymbolicLink()) {
+-            st_mode |= S_IFLNK;
+-        } else {
+-            try {
+-                st_mode = calculateSymlink(file, st_mode);
+-            } catch (IOException e) {
+-                // Not sure we can do much in this case...
+-            }
+-        }
++        // TEAVM: no symlinks in TeaVM's virtual file system
+ 
+         return st_mode;
+     }
+@@ -198,13 +167,7 @@
+     }
+ 
+     public boolean isExecutable() {
+-        if (posixAttrs != null) {
+-            Set<PosixFilePermission> permissions = posixAttrs.permissions();
+-
+-            return permissions.contains(PosixFilePermission.OWNER_EXECUTE) ||
+-                    permissions.contains(PosixFilePermission.GROUP_EXECUTE) ||
+-                    permissions.contains(PosixFilePermission.OTHERS_EXECUTE);
+-        }
++        // TEAVM: no PosixFileAttributes
+ 
+         // silently return false, since it's likely an unusual filesystem
+         return false;
+@@ -246,13 +209,7 @@
+     }
+ 
+     public boolean isReadable() {
+-        if (posixAttrs != null) {
+-            Set<PosixFilePermission> permissions = posixAttrs.permissions();
+-
+-            return permissions.contains(PosixFilePermission.OWNER_READ) ||
+-                    permissions.contains(PosixFilePermission.GROUP_READ) ||
+-                    permissions.contains(PosixFilePermission.OTHERS_READ);
+-        }
++        // TEAVM: no PosixFileAttributes
+ 
+         int mode = mode();
+         
+@@ -269,23 +226,13 @@
+     }
+ 
+     public boolean isSymlink() {
+-        if (posixAttrs != null) {
+-            return posixAttrs.isSymbolicLink();
+-        }
++        // TEAVM: no PosixFileAttributes
+ 
+         return (mode() & S_IFLNK) == S_IFLNK;
+     }
+     
+     public boolean isWritable() {
+-        if (posixAttrs != null) {
+-            Set<PosixFilePermission> permissions = posixAttrs.permissions();
+-
+-            return permissions.contains(PosixFilePermission.OWNER_WRITE) ||
+-                    permissions.contains(PosixFilePermission.GROUP_WRITE) ||
+-                    permissions.contains(PosixFilePermission.OTHERS_WRITE);
+-        } else if (dosAttrs != null) {
+-            return !dosAttrs.isReadOnly();
+-        }
++        // TEAVM: no PosixFileAttributes/DosFileAttributes
+ 
+         int mode = mode();
+         
+--- a/jnr/posix/JavaLibCHelper.java
++++ b/jnr/posix/JavaLibCHelper.java
+@@ -277,26 +277,8 @@
+         } catch (UnsupportedOperationException uoe) {
+             // if handler raises UOE, as our default handler does, try other ways
+ 
+-            // Java 9+ provide ProcessHandle.current
+-            try {
+-                Class processHandle = Class.forName("java.lang.ProcessHandle");
+-                Object current = processHandle.getMethod("current").invoke(null); // static
+-                return (int) (long) (Long) processHandle.getMethod("pid").invoke(current);
+-            } catch (Exception e) {
+-                // ignore, try Java 8 logic below
+-            }
+-
+-            // Java 8- can use management beans to infer the pid
+-            try {
+-                String runtimeName = ManagementFactory.getRuntimeMXBean().getName();
+-                int index = runtimeName.indexOf('@');
+-
+-                if (index > 0) {
+-                    return (int) Long.parseLong(runtimeName.substring(0, index));
+-                }
+-            } catch (Exception e) {
+-                // ignore, rethrow UOE below
+-            }
++            // TEAVM: no ProcessHandle/ManagementFactory; the browser "process" has pid 1
++            if (true) return 1;
+ 
+             // couldn't do it, rethrow
+             throw uoe;
+--- a/org/jcodings/util/ArrayReader.java
++++ b/org/jcodings/util/ArrayReader.java
+@@ -31,6 +31,18 @@
+     public static DataInputStream openStream(String name) {
+         String entry = "/tables/" + name + ".bin";
+         InputStream is = ArrayReader.class.getResourceAsStream(entry);
++        // TEAVM: TeaVM only embeds resources that a ResourceSupplier declares; the browser build ships the
++        // tables in a file system directory instead (property jcodings.tables.dir)
++        if (is == null) {
++            String dir = System.getProperty("jcodings.tables.dir");
++            if (dir != null) {
++                try {
++                    is = new java.io.FileInputStream(dir + "/" + name + ".bin");
++                } catch (java.io.FileNotFoundException e) {
++                    is = null;
++                }
++            }
++        }
+         if (is == null) throw new InternalException("entry: " + entry + " not found");
+         return new DataInputStream(new BufferedInputStream(is));
+     }
+--- a/org/jruby/ext/stringio/StringIO.java
++++ b/org/jruby/ext/stringio/StringIO.java
+@@ -1637,59 +1637,18 @@
+         return RubyFixnum.newFixnum(runtime, len);
+     }
+ 
+-    private static final MethodHandle CAT_WITH_CODE_RANGE;
+-    private static final MethodHandle MODIFY_AND_CLEAR_CODE_RANGE;
+-    private static final MethodHandle SUBSTR_ENC;
+-    private static final MethodHandle CHECK_ENCODING;
+-
+-    static {
+-        MethodHandle cat, modify, substr, checkEncoding;
+-        MethodHandles.Lookup lookup = MethodHandles.lookup();
+-        try {
+-            cat = lookup.findVirtual(RubyString.class, "catWithCodeRange", MethodType.methodType(RubyString.class, RubyString.class));
+-            modify = lookup.findVirtual(RubyString.class, "modifyAndClearCodeRange", MethodType.methodType(void.class));
+-            substr = lookup.findVirtual(RubyString.class, "substrEnc", MethodType.methodType(IRubyObject.class, Ruby.class, int.class, int.class));
+-            checkEncoding = lookup.findStatic(RubyEncoding.class, "checkEncoding", MethodType.methodType(Encoding.class, ThreadContext.class, Encoding.class, CodeRangeable.class));
+-        } catch (NoSuchMethodException | IllegalAccessException ex) {
+-            try {
+-                cat = lookup.findVirtual(RubyString.class, "cat19", MethodType.methodType(RubyString.class, RubyString.class));
+-                modify = lookup.findVirtual(RubyString.class, "modify19", MethodType.methodType(void.class));
+-                substr = lookup.findVirtual(RubyString.class, "substr19", MethodType.methodType(IRubyObject.class, Ruby.class, int.class, int.class));
+-                checkEncoding = lookup.findStatic(StringIO.class, "checkEncoding", MethodType.methodType(Encoding.class, ThreadContext.class, Encoding.class, CodeRangeable.class));
+-            } catch (NoSuchMethodException | IllegalAccessException ex2) {
+-                throw new ExceptionInInitializerError(ex2);
+-            }
+-        }
+-
+-        CAT_WITH_CODE_RANGE = cat;
+-        MODIFY_AND_CLEAR_CODE_RANGE = modify;
+-        SUBSTR_ENC = substr;
+-        CHECK_ENCODING = checkEncoding;
+-    }
+-
++    // TEAVM: the MethodHandle indirection (for compatibility with older JRuby versions) is replaced by
++    // direct calls to the JRuby 10 API; TeaVM has no java.lang.invoke.
+     private static void catString(RubyString myString, RubyString str) {
+-        try {
+-            RubyString unused = (RubyString) CAT_WITH_CODE_RANGE.invokeExact(myString, str);
+-        } catch (Throwable t) {
+-            Helpers.throwException(t);
+-        }
++        myString.catWithCodeRange(str);
+     }
+ 
+     private static void modifyString(RubyString string) {
+-        try {
+-            MODIFY_AND_CLEAR_CODE_RANGE.invokeExact(string);
+-        } catch (Throwable t) {
+-            Helpers.throwException(t);
+-        }
++        string.modifyAndClearCodeRange();
+     }
+ 
+     private static IRubyObject substrString(RubyString ch, IRubyObject str, Ruby runtime) {
+-        try {
+-            str = (IRubyObject) SUBSTR_ENC.invokeExact(ch, runtime, 0, 1);
+-        } catch (Throwable t) {
+-            Helpers.throwException(t);
+-        }
+-        return str;
++        return ch.substrEnc(runtime, 0, 1);
+     }
+ 
+     // MRI: strio_write
+@@ -1745,11 +1704,7 @@
+     }
+ 
+     private static void rb_enc_check(ThreadContext context, Encoding enc, CodeRangeable str) {
+-        try {
+-            Encoding ignored = (Encoding) CHECK_ENCODING.invokeExact(context, enc, str);
+-        } catch (Throwable t) {
+-            Helpers.throwException(t);
+-        }
++        RubyEncoding.checkEncoding(context, enc, str); // TEAVM: direct call instead of MethodHandle
+     }
+ 
+     /**

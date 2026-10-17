@@ -1,0 +1,7 @@
+
+    // compat: JDK API gap (JRuby's MethodGatherer skips default interface methods); same definition as the JDK
+    public boolean isDefault() {
+        return (getModifiers() & (TModifier.ABSTRACT | TModifier.PUBLIC | TModifier.STATIC)) == TModifier.PUBLIC
+                && getDeclaringClass().isInterface();
+    }
+}

@@ -1,0 +1,110 @@
+# java-classes.txt: the Java classes that Ruby code can use in the browser build (JRuby Java integration).
+#
+# TeaVM compiles ahead of time, so there is no class loading and no reflection unless it is declared at build
+# time. For every class listed here the build
+#   * makes it loadable by name from Ruby (java.util.ArrayList, Java::JavaUtil::ArrayList, java_import ...)
+#     through a generated registry (scripts/gen-registry.sh -> org.jruby.gen.JavaClassRegistryImpl),
+#   * emits TeaVM reflection metadata for its public constructors, methods and fields, and for those of all its
+#     superclasses and superinterfaces (teavm-plugin/jrubyweb/teavm/JavaClassesPolicy.java),
+#   * and, for an interface, generates the java.lang.reflect.Proxy class JRuby uses when Ruby implements it
+#     (a block passed for the interface, Iface.impl { }, or a Ruby class doing `include Iface`).
+#
+# Format: one binary class name per line ('#' starts a comment). Optional words after the name restrict the
+# class's own members to those names ("new" = its constructors); its supertypes stay unrestricted.
+# Add a class: append a line, rebuild (./build.sh). Your own Java sources go under demo-src/ (any package).
+# Every class costs code size (its public methods are compiled in).
+# Not supported: java.time (not in TeaVM's class library), Ruby subclasses of Java classes (no bytecode generation).
+
+# java.lang
+java.lang.Object
+java.lang.Class getName getSimpleName getCanonicalName getResource getField getDeclaredField getSuperclass getInterfaces getComponentType getModifiers isInterface isArray isPrimitive isInstance isAssignableFrom
+java.lang.String
+java.lang.StringBuilder
+java.lang.Math
+java.lang.System currentTimeMillis nanoTime getProperty lineSeparator identityHashCode out err
+java.io.PrintStream print println printf format flush
+java.lang.Integer
+java.lang.Long
+java.lang.Double
+java.lang.Boolean
+java.lang.Character
+java.lang.Comparable
+java.lang.Iterable
+java.lang.Runnable
+
+# exceptions (rescue java.lang.ArithmeticException => e)
+java.lang.Throwable
+java.lang.Exception
+java.lang.RuntimeException
+java.lang.ArithmeticException
+java.lang.IllegalArgumentException
+java.lang.IllegalStateException
+java.lang.IndexOutOfBoundsException
+java.lang.NullPointerException
+java.lang.NumberFormatException
+java.lang.UnsupportedOperationException
+java.lang.ClassCastException
+java.util.NoSuchElementException
+
+# java.util
+java.util.ArrayList
+java.util.HashMap
+java.util.TreeMap
+java.util.Collections
+java.util.Arrays
+java.util.Comparator
+java.util.HashSet
+java.util.List
+java.util.Map
+java.util.Map$Entry
+java.util.Iterator
+java.util.function.Function
+java.util.function.Supplier
+java.util.function.Consumer
+java.util.function.BiConsumer
+java.util.function.BiFunction
+java.util.concurrent.atomic.AtomicLong
+
+# java.math
+java.math.BigInteger
+java.math.BigDecimal
+java.math.RoundingMode
+java.math.MathContext
+
+# the demo class (demo-src/)
+demo.Mandelbrot
+demo.Listener
+
+# web/visual.html: Ruby drawing on a <canvas> (demo-src/demo/Canvas2D.java: TeaVM JSO calls) and reading the page
+demo.Canvas2D
+demo.Canvas2D$Frame
+demo.Canvas2D$Click
+demo.Page
+
+# JBox2D 2.2.1.1 (org.jbox2d:jbox2d-library, BSD-2-Clause): 2D physics, Java port of Box2D (shared/jars/demo-libs).
+# World is restricted to what the demo needs (joints, ray casts and debug drawing stay out of the build).
+org.jbox2d.common.Vec2
+org.jbox2d.dynamics.World new step createBody destroyBody getBodyList getBodyCount getContactCount setGravity getGravity clearForces setAllowSleep isLocked
+org.jbox2d.dynamics.Body
+org.jbox2d.dynamics.BodyDef
+org.jbox2d.dynamics.BodyType
+org.jbox2d.dynamics.Fixture
+org.jbox2d.dynamics.FixtureDef
+org.jbox2d.collision.shapes.Shape
+org.jbox2d.collision.shapes.PolygonShape
+org.jbox2d.collision.shapes.CircleShape
+
+# ZXing core 3.5.4 (com.google.zxing:core, Apache-2.0): QR code encoder and decoder (shared/jars/demo-libs)
+com.google.zxing.BarcodeFormat
+com.google.zxing.EncodeHintType
+com.google.zxing.qrcode.QRCodeWriter
+com.google.zxing.qrcode.QRCodeReader
+com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
+com.google.zxing.common.BitMatrix
+com.google.zxing.RGBLuminanceSource
+com.google.zxing.BinaryBitmap
+com.google.zxing.common.HybridBinarizer
+com.google.zxing.Result
+com.google.zxing.ResultPoint
+com.google.zxing.ReaderException
+com.google.zxing.WriterException

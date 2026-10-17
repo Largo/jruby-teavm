@@ -1,0 +1,38 @@
+
+    // compat: missing in TeaVM 0.16.0
+    public enum State { NEW, RUNNABLE, BLOCKED, WAITING, TIMED_WAITING, TERMINATED }
+
+    private TClassLoader compatContextClassLoader;
+
+    public void setContextClassLoader(TClassLoader cl) {
+        compatContextClassLoader = cl;
+    }
+
+    public final long threadId() {
+        return getId();
+    }
+
+    public State getState() {
+        return isAlive() ? State.RUNNABLE : State.TERMINATED;
+    }
+
+    public static void dumpStack() {
+    }
+
+    public final TThreadGroup getThreadGroup() {
+        return TThreadGroup.MAIN;
+    }
+
+    // compat helpers for the patched TArrayBlockingQueue and the compat locks (see compat-ext/*.sed)
+    public static void compatSetCurrentThread(TThread thread) {
+        setCurrentThread(thread);
+    }
+
+    public static void compatLater(Runnable action) {
+        if (PlatformDetector.isLowLevel() || PlatformDetector.isWebAssemblyGC()) {
+            EventQueue.offer(action::run);
+        } else {
+            Platform.postpone(action::run);
+        }
+    }
+}

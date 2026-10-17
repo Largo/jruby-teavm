@@ -1,0 +1,11 @@
+
+    // compat: JDK API gaps (JRuby's Java::JavaLang::Class extensions alias getResource, use isAnonymousClass);
+    // no resource has a URL in the browser
+    public java.net.URL getResource(String name) {
+        return null;
+    }
+
+    public boolean isAnonymousClass() {
+        return !isArray() && !isPrimitive() && getSimpleName().isEmpty();
+    }
+}

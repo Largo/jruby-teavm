@@ -1,0 +1,15 @@
+// Copies the third-party Java libraries of the visual demo (web/visual.html) into ../../jars/demo-libs.
+// Pure Java, no AWT; TeaVM compiles them to JavaScript together with JRuby (see java-classes.txt).
+//   JBox2D 2.2.1.1 (BSD-2-Clause, "Simplified BSD License")   2D physics engine, Java port of Box2D
+//   ZXing core 3.5.4 (Apache-2.0)                              QR code (and other barcode) encoder/decoder
+plugins { id 'base' }
+repositories { mavenCentral() }
+configurations { libs { transitive = false } }
+dependencies {
+  libs 'org.jbox2d:jbox2d-library:2.2.1.1'
+  libs 'com.google.zxing:core:3.5.4'
+}
+tasks.register('copyDeps', Sync) {
+  from configurations.libs
+  into "${projectDir}/../../jars/demo-libs"
+}

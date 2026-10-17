@@ -1,0 +1,36 @@
+
+    // compat: missing in TeaVM 0.16.0. There are no processes or shutdown hooks in the browser.
+    public java.lang.Process exec(String command) throws java.io.IOException {
+        throw new java.io.IOException("Cannot run program \"" + command + "\": processes are not supported (TeaVM)");
+    }
+
+    public java.lang.Process exec(String[] cmdarray) throws java.io.IOException {
+        throw new java.io.IOException("processes are not supported (TeaVM)");
+    }
+
+    public java.lang.Process exec(String[] cmdarray, String[] envp) throws java.io.IOException {
+        throw new java.io.IOException("processes are not supported (TeaVM)");
+    }
+
+    public java.lang.Process exec(String[] cmdarray, String[] envp, java.io.File dir) throws java.io.IOException {
+        throw new java.io.IOException("processes are not supported (TeaVM)");
+    }
+
+    public java.lang.Process exec(String command, String[] envp, java.io.File dir) throws java.io.IOException {
+        throw new java.io.IOException("processes are not supported (TeaVM)");
+    }
+
+    public void addShutdownHook(java.lang.Thread hook) {
+    }
+
+    public boolean removeShutdownHook(java.lang.Thread hook) {
+        return false;
+    }
+
+    public long maxMemory() {
+        return Long.MAX_VALUE;
+    }
+
+    public void halt(int status) {
+    }
+}

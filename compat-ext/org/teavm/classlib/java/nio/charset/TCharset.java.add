@@ -1,0 +1,41 @@
+    // compat: JDK API gap (ZXing's CharacterSetECI)
+    public static boolean isSupported(String charsetName) {
+        if (charsetName == null) {
+            throw new IllegalArgumentException("charsetName is null");
+        }
+        checkCanonicalName(charsetName);
+        return Charsets.value.containsKey(charsetName.toUpperCase());
+    }
+
+    // compat: the JDK's aliases of the standard charsets (see TCharset.java.sed)
+    static void compatAddAliases(Map<String, TCharset> map, TCharset charset) {
+        String[] aliases;
+        switch (charset.name()) {
+            case "UTF-8":
+                aliases = new String[] { "UTF8", "unicode-1-1-utf-8" };
+                break;
+            case "US-ASCII":
+                aliases = new String[] { "ASCII", "US_ASCII", "ASCII7", "646", "ISO646-US", "ANSI_X3.4-1968",
+                        "ANSI_X3.4-1986", "iso-ir-6", "cp367", "IBM367", "csASCII", "us", "default" };
+                break;
+            case "ISO-8859-1":
+                aliases = new String[] { "ISO8859_1", "ISO_8859_1", "ISO8859-1", "ISO_8859-1", "ISO_8859-1:1987",
+                        "8859_1", "latin1", "l1", "iso-ir-100", "IBM819", "IBM-819", "cp819", "819", "csISOLatin1" };
+                break;
+            case "UTF-16":
+                aliases = new String[] { "UTF_16", "utf16", "unicode", "UnicodeBig" };
+                break;
+            case "UTF-16BE":
+                aliases = new String[] { "UTF_16BE", "UnicodeBigUnmarked", "X-UTF-16BE", "ISO-10646-UCS-2" };
+                break;
+            case "UTF-16LE":
+                aliases = new String[] { "UTF_16LE", "UnicodeLittleUnmarked", "X-UTF-16LE" };
+                break;
+            default:
+                aliases = new String[0];
+        }
+        for (String alias : aliases) {
+            map.put(alias.toUpperCase(), charset);
+        }
+    }
+}

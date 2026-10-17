@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>jruby-teavm smoke</title></head>
+<body><pre id="log"></pre>
+<script type="module">
+const log = (m) => { console.log(m); document.getElementById('log').textContent += m + "\n"; };
+try {
+  Error.stackTraceLimit = 60;
+  const t0 = performance.now();
+  const { main, mountZip, bootAsync, rubyEvalAsync } = await import('./jruby.js');
+  main([]);
+  const zip = new Int8Array(await (await fetch('stdlib.zip')).arrayBuffer());
+  log('mounted ' + mountZip(zip, '/jruby') + ' files');
+  const t1 = performance.now();
+  log('boot: ' + JSON.parse(await new Promise((r) => bootAsync(r))).description + ' in ' + Math.round(performance.now() - t1) + ' ms');
+  const code = new URLSearchParams(location.search).get('code') || 'puts 1 + 1';
+  log('eval: ' + await new Promise((r) => rubyEvalAsync(code, r)));
+  log('total ' + Math.round(performance.now() - t0) + ' ms');
+} catch (e) {
+  log('FAILED: ' + e + '\n' + (e.stack || ''));
+}
+window.__done = true;
+</script></body></html>

@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ruby calling Java in the browser (JRuby + TeaVM)</title>
+<style>
+  :root { --bg:#fafaf7; --fg:#1d1d1b; --muted:#6b6b66; --accent:#b3261e; --panel:#fff; --border:#ddd9cf; --chip:#f1efe8; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#1b1b19; --fg:#ecebe6; --muted:#a3a29b; --accent:#f28b82; --panel:#262624; --border:#3a3936; --chip:#302f2c; } }
+  body { margin:0; padding:1.5rem 1rem; background:var(--bg); color:var(--fg); font:15px/1.45 system-ui, sans-serif; }
+  main { max-width: 52rem; margin: 0 auto; }
+  h1 { font-size:1.3rem; margin:0 0 .25rem; }
+  p.sub { margin:0 0 1rem; color:var(--muted); }
+  a { color: var(--accent); }
+  textarea, pre { width:100%; box-sizing:border-box; font:13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+    background:var(--panel); color:var(--fg); border:1px solid var(--border); border-radius:6px; padding:.6rem .7rem; }
+  textarea { height: 15rem; resize: vertical; }
+  pre { min-height: 6rem; white-space: pre-wrap; overflow-x:auto; margin:.6rem 0 0; }
+  .row { display:flex; gap:.6rem; align-items:center; flex-wrap:wrap; margin:.6rem 0 0; }
+  .presets { display:flex; gap:.4rem; flex-wrap:wrap; margin:0 0 .6rem; }
+  .presets button { background:var(--chip); color:var(--fg); border-color:var(--border); padding:.25rem .7rem; font-size:.9rem; }
+  .presets button[aria-pressed="true"] { border-color:var(--accent); }
+  button { font:inherit; padding:.4rem 1rem; border-radius:6px; border:1px solid var(--accent); background:var(--accent); color:#fff; cursor:pointer; }
+  button:disabled { opacity:.5; cursor:default; }
+  #status { color:var(--muted); font-size:.9rem; }
+  .err { color: var(--accent); }
+  canvas { display:block; width:100%; max-width:40rem; image-rendering:pixelated; margin:.6rem 0 0; border-radius:6px; border:1px solid var(--border); }
+  canvas[hidden] { display:none; }
+  details { margin:1rem 0 0; color:var(--muted); }
+  details pre { color:var(--fg); max-height: 22rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Ruby calling Java, in your browser</h1>
+  <p class="sub">JRuby's Java integration, compiled to JavaScript with TeaVM. The Java classes of
+    <code>java-classes.txt</code> (JDK basics, demo classes, parts of JBox2D and ZXing) are built into <code>jruby.js</code>, and Ruby uses
+    them as on the JVM: <code>java.util.ArrayList.new</code>, blocks as Java interfaces, Java exceptions,
+    Java calling back into Ruby. CRuby and ruby.wasm cannot do this. Ctrl+Enter runs the code.
+    <a href="./">Plain Ruby REPL</a> &middot; <a href="visual.html">Visual demo: JBox2D physics and ZXing QR codes on a canvas</a></p>
+  <div class="presets" id="presets"></div>
+  <textarea id="code" spellcheck="false"></textarea>
+  <div class="row"><button id="run" disabled>Run</button><span id="status">loading jruby.js...</span></div>
+  <pre id="out" aria-live="polite"></pre>
+  <canvas id="canvas" hidden></canvas>
+  <details><summary>Java classes in this build (java-classes.txt)</summary><pre id="classes">loading...</pre></details>
+</main>
+<script type="module">
+  const presets = {
+    'Hello, Java': `require 'java'
+puts "JRuby #{JRUBY_VERSION}, Java vendor: #{java.lang.System.getProperty('java.vendor')}"
+java.lang.System.out.println("Hello from Java's System.out")
+
+sb = Java::JavaLang::StringBuilder.new("Ruby")   # a Java object
+sb.append(" + ").append("Java").append(" = ").append(true)
+puts sb.to_s                                      # java.lang.String -> Ruby String
+p java.lang.Math.max(3, 7), java.lang.Math.sqrt(2.0)
+p java.lang.Integer.toBinaryString(42), java.lang.Long::MAX_VALUE`,
+
+    'Collections + blocks': `list = java.util.ArrayList.new([5, 8, 3, 9, 2])
+java.util.Collections.sort(list) { |a, b| b <=> a }   # Ruby block as a java.util.Comparator
+p list.to_a
+p list.select(&:odd?), list.map { |x| x * x }       # Java collections are Enumerable
+list.forEach { |x| print x, " " }                   # block as a java.util.function.Consumer
+puts
+
+java_import java.util.HashMap
+ages = HashMap.new("ann" => 31, "bob" => 27)        # Ruby Hash -> java.util.Map
+ages.put("cy", 45)
+ages.each_pair { |name, age| puts "#{name}: #{age}" }
+p ages.computeIfAbsent("dee") { |k| k.size * 10 }   # block as a java.util.function.Function`,
+
+    'BigDecimal money': `java_import java.math.BigDecimal
+java_import java.math.RoundingMode
+
+puts 0.1 + 0.2                                   # Ruby Float
+puts BigDecimal.new("0.1").add(BigDecimal.new("0.2"))   # exact decimal arithmetic in Java
+
+price = BigDecimal.new("19.99")
+total = price.multiply(BigDecimal.new(3))
+vat = total.multiply(BigDecimal.new("0.081")).setScale(2, RoundingMode::HALF_UP)
+puts "3 x #{price} = #{total} + VAT #{vat} = #{total.add(vat)}"
+puts BigDecimal.new(1).divide(BigDecimal.new(7), 20, RoundingMode::HALF_EVEN)
+
+p java.math.BigInteger.new("2").pow(100)         # BigInteger results become Ruby Integers`,
+
+    'TreeMap': `counts = java.util.TreeMap.new                   # keys stay sorted (by Java)
+"the quick brown fox jumps over the lazy dog and the end".split.each do |word|
+  counts.put(word, (counts.get(word) || 0) + 1)
+end
+counts.each { |word, n| puts "#{word.ljust(6)} #{'#' * n}" }
+p counts.firstKey, counts.lastKey
+p counts.headMap("fox").keys`,
+
+    'Java exceptions': `begin
+  java.math.BigDecimal.new(1).divide(java.math.BigDecimal.new(3))
+rescue java.lang.ArithmeticException => e
+  puts "#{e.class}: #{e.message}"
+end
+
+begin
+  java.lang.Integer.parseInt("forty-two")
+rescue java.lang.NumberFormatException => e
+  puts "rescued #{e.class.name}"
+end
+
+begin
+  java.util.ArrayList.new.get(3)
+rescue => e                                   # a bare rescue catches Java exceptions too
+  puts "rescued #{e.class}"
+end
+
+java.util.Collections.emptyList.add("x")      # uncaught: reported like a Ruby error`,
+
+    'Mandelbrot (ASCII)': `# demo.Mandelbrot is a Java class compiled into this build (demo-src/demo/Mandelbrot.java)
+m = Java::Demo::Mandelbrot.new(72, 24)
+palette = " .:-=+*#%@"
+m.render do |y, iterations|                   # Java calls this Ruby block once per row (demo.Listener)
+  puts iterations.map { |n| palette[n * (palette.size - 1) / m.max_iterations] }.join
+end
+puts m.toString, "computed #{m.pixels_computed} pixels in Java"`,
+
+    'Mandelbrot (canvas)': `# Java computes, Ruby collects the rows, and the page draws the value of the snippet
+# (an Array of Integer rows) on the canvas.
+m = Java::Demo::Mandelbrot.new(320, 200, 96)
+m.cell_aspect = 1.0                            # square pixels (bean property -> setCellAspect)
+m.zoom(-0.6, 0.0, 3.0)
+rows = []
+m.render { |y, iterations| rows << iterations.to_a }   # Java -> Ruby callback for each row
+rows`,
+
+    'Interfaces in Ruby': `# A Ruby class implementing a Java interface; Java calls it back (demo.Mandelbrot#render)
+class InsideCounter
+  include Java::Demo::Listener
+  attr_reader :inside
+
+  def initialize(max) = (@max = max; @inside = 0)
+
+  def row(y, iterations)                     # called from Java for every row
+    @inside += iterations.count { |n| n == @max }
+  end
+end
+
+m = Java::Demo::Mandelbrot.new(120, 60)
+counter = InsideCounter.new(m.max_iterations)
+pixels = m.render(counter)
+puts "#{counter.inside} of #{pixels} pixels are inside the set"
+
+# interfaces from blocks
+by_length = java.util.Comparator.impl { |_method, a, b| a.size <=> b.size }
+words = java.util.TreeMap.new(by_length)
+%w[kiwi fig banana apple].each { |w| words.put(w, w.upcase) }
+p words.keys
+java.lang.Runnable.impl { puts "a Ruby block run as a java.lang.Runnable" }.run`,
+
+    'Java arrays': `nums = [5, 2, 8, 1].to_java(:int)              # Ruby Array -> Java int[]
+java.util.Arrays.sort(nums)
+puts java.util.Arrays.toString(nums)
+p nums.to_a, nums.length
+
+grid = Java::int[3, 4].new                     # int[3][4]
+grid[1][2] = 7
+p grid.map(&:to_a)
+
+p java.util.Arrays.asList("a", "b", "c").to_a  # varargs
+p java.util.Collections.nCopies(3, "ab").to_a`,
+  };
+
+  const $ = (id) => document.getElementById(id);
+  const status = (m) => { $('status').textContent = m; };
+  let api;
+  const evalAsync = (code) => new Promise((resolve) => api.rubyEvalAsync(code, (json) => resolve(JSON.parse(json))));
+
+  for (const name of Object.keys(presets)) {
+    const b = document.createElement('button');
+    b.textContent = name;
+    b.onclick = () => {
+      for (const other of $('presets').children) other.setAttribute('aria-pressed', String(other === b));
+      $('code').value = presets[name];
+      if (!$('run').disabled) run();
+    };
+    $('presets').append(b);
+  }
+  $('presets').firstChild.setAttribute('aria-pressed', 'true');
+  $('code').value = presets['Hello, Java'];
+
+  // a snippet whose value is an Array of Integer rows is drawn as a heat map (Mandelbrot iteration counts)
+  function draw(result) {
+    const canvas = $('canvas');
+    canvas.hidden = true;
+    if (!result || !result.startsWith('[[')) return;
+    let rows;
+    try { rows = JSON.parse(result); } catch (e) { return; }
+    const h = rows.length, w = rows[0].length;
+    if (h < 2 || w < 2 || !rows.every((r) => Array.isArray(r) && r.length === w && r.every(Number.isInteger))) return;
+    const max = Math.max(...rows.map((r) => Math.max(...r)));
+    canvas.width = w; canvas.height = h; canvas.hidden = false;
+    const ctx = canvas.getContext('2d');
+    const img = ctx.createImageData(w, h);
+    // gradient stops (position, r, g, b); the largest value (inside the set) is black
+    const stops = [[0, 0, 7, 100], [0.16, 32, 107, 203], [0.42, 237, 255, 255], [0.64, 255, 170, 0], [0.86, 120, 20, 0], [1, 0, 2, 0]];
+    const color = (t) => {
+      let k = 1;
+      while (k < stops.length - 1 && stops[k][0] < t) k++;
+      const [p0, ...c0] = stops[k - 1], [p1, ...c1] = stops[k], f = (t - p0) / (p1 - p0 || 1);
+      return c0.map((c, j) => c + (c1[j] - c) * f);
+    };
+    rows.forEach((r, y) => r.forEach((n, x) => {
+      const i = 4 * (y * w + x);
+      const [cr, cg, cb] = n >= max ? [0, 0, 0] : color(Math.sqrt(n / max));
+      img.data[i] = cr; img.data[i + 1] = cg; img.data[i + 2] = cb; img.data[i + 3] = 255;
+    }));
+    ctx.putImageData(img, 0, 0);
+  }
+
+  async function run() {
+    const t = performance.now();
+    $('run').disabled = true;
+    status('running...');
+    const r = await evalAsync($('code').value);
+    $('run').disabled = false;
+    const out = $('out');
+    out.textContent = r.out;
+    if (r.error) {
+      const e = document.createElement('span'); e.className = 'err'; e.textContent = r.error; out.append(e);
+    } else if (r.result && r.result.length > 2000 && r.result.startsWith('[[')) {
+      out.append('=> (Array of ' + r.result.split('], [').length + ' rows, drawn below)');
+    } else {
+      out.append('=> ' + r.result);
+    }
+    draw(r.error ? null : r.result);
+    status((window.__jrubyBootMs ? 'ready in ' + window.__jrubyBootMs + ' ms, ' : '') + 'ran in ' + Math.round(performance.now() - t) + ' ms');
+    return r;
+  }
+  window.jrubyEval = evalAsync;
+
+  fetch('java-classes.txt').then((r) => r.ok ? r.text() : Promise.reject(r.status))
+    .then((text) => { $('classes').textContent = text.split('\n').filter((l) => l.trim() && !l.startsWith('#')).join('\n'); })
+    .catch(() => { $('classes').textContent = '(java-classes.txt not found next to this page)'; });
+
+  try {
+    Error.stackTraceLimit = 60;
+    const t0 = performance.now();
+    api = await import('./jruby.js');
+    api.main([]);
+    status('loading stdlib.zip...');
+    api.mountZip(new Int8Array(await (await fetch('stdlib.zip')).arrayBuffer()), '/jruby');
+    status('booting JRuby...');
+    const desc = JSON.parse(await new Promise((resolve) => api.bootAsync(resolve))).description;
+    status('loading the Java integration...');
+    await evalAsync("require 'java'");            // otherwise loaded by the first use of java/Java::
+    window.__jrubyBootMs = Math.round(performance.now() - t0);
+    status(desc + ' (ready in ' + window.__jrubyBootMs + ' ms)');
+    $('run').disabled = false;
+    $('run').onclick = run;
+    $('code').addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); run(); } });
+    window.__jrubyReady = true;
+    console.log('jruby ready: ' + desc);
+    if (!new URLSearchParams(location.search).has('norun')) await run();   // show the first preset's output
+    window.__done = true;
+  } catch (e) {
+    status('failed: ' + e);
+    console.error(e);
+    window.__jrubyError = String(e);
+    window.__done = true;
+  }
+</script>
+</body>
+</html>

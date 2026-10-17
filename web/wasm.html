@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>jruby-teavm (WebAssembly GC)</title>
+<script src="jruby.wasm-runtime.js"></script></head>
+<body><pre id="log"></pre>
+<script type="module">
+// Same API as the JS build, loaded from jruby.wasm. This page uses the synchronous boot()/rubyEval():
+// TeaVM 0.16.0's wasm-gc coroutine runtime overflows the stack when a JRuby thread suspends, so blocking
+// Ruby code (Fiber, Thread#join, Queue#pop, sleep) does not work in this build.
+const log = (m) => { console.log(m); document.getElementById('log').textContent += m + "\n"; };
+try {
+  const t0 = performance.now();
+  const teavm = await TeaVM.wasmGC.load('jruby.wasm');
+  const api = teavm.exports;
+  api.main([]);
+  const zip = new Int8Array(await (await fetch('stdlib.zip')).arrayBuffer());
+  log('mounted ' + api.mountZip(zip, '/jruby') + ' files');
+  const t1 = performance.now();
+  log('boot: ' + api.boot() + ' in ' + Math.round(performance.now() - t1) + ' ms');
+  window.jrubyEval = async (code) => JSON.parse(api.rubyEval(code));
+  window.__jrubyBootMs = Math.round(performance.now() - t0);
+  window.__jrubyReady = true;
+  const code = new URLSearchParams(location.search).get('code') || 'puts 1 + 1';
+  log('eval: ' + JSON.stringify(await window.jrubyEval(code)));
+  log('total ' + Math.round(performance.now() - t0) + ' ms');
+} catch (e) {
+  log('FAILED: ' + e + '\n' + (e.stack || ''));
+  window.__jrubyError = String(e);
+}
+window.__done = true;
+</script></body></html>

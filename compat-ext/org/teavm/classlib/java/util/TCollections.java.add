@@ -1,0 +1,6 @@
+
+    // compat: missing in TeaVM 0.16.0 (read-only callers only: joda-time ZoneInfoProvider)
+    public static <T> java.util.SortedSet<T> unmodifiableSortedSet(java.util.SortedSet<T> s) {
+        return s;
+    }
+}

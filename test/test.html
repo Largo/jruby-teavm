@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>jruby-teavm tests</title></head>
+<body><pre id="log"></pre>
+<canvas id="test-canvas" width="20" height="10"></canvas><!-- for the demo.Canvas2D cases -->
+<script type="module">
+// Test page used by test/run-tests.sh: boots JRuby (JS build: index.html's API; wasm: ?wasm=1), runs every case
+// of cases.json in order and leaves the results in window.__results, then sets window.__testsDone.
+const log = (m) => { document.getElementById('log').textContent += m + "\n"; };
+const params = new URLSearchParams(location.search);
+const skipBlocking = params.has('skipBlocking');
+let evalOne, bootMs;
+try {
+  const t0 = performance.now();
+  if (params.has('wasm')) {
+    await new Promise((ok, fail) => { const s = document.createElement('script'); s.src = 'jruby.wasm-runtime.js'; s.onload = ok; s.onerror = fail; document.head.append(s); });
+    const api = (await TeaVM.wasmGC.load('jruby.wasm')).exports;
+    api.main([]);
+    api.mountZip(new Int8Array(await (await fetch('stdlib.zip')).arrayBuffer()), '/jruby');
+    api.boot();
+    evalOne = async (code) => JSON.parse(api.rubyEval(code));   // wasm: synchronous API only
+  } else {
+    const api = await import('./jruby.js');
+    api.main([]);
+    api.mountZip(new Int8Array(await (await fetch('stdlib.zip')).arrayBuffer()), '/jruby');
+    await new Promise((r) => api.bootAsync(r));
+    evalOne = (code) => new Promise((r) => api.rubyEvalAsync(code, (json) => r(JSON.parse(json))));
+  }
+  bootMs = Math.round(performance.now() - t0);
+  const cases = (await (await fetch('cases.json')).json()).filter(c => !(skipBlocking && c.blocking));
+  const results = [];
+  for (const c of cases) {
+    const t = performance.now();
+    const r = await Promise.race([evalOne(c.code), new Promise(ok => setTimeout(() => ok({out: '', result: null, error: 'timeout (30 s)'}), 30000))]);
+    r.ms = Math.round(performance.now() - t);
+    results.push(r);
+    log(c.name + ': ' + JSON.stringify(r));
+  }
+  window.__results = { bootMs, error: null, results };
+} catch (e) {
+  window.__results = { bootMs, error: String(e) + '\n' + (e.stack || ''), results: [] };
+}
+window.__testsDone = true;
+</script></body></html>

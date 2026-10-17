@@ -1,0 +1,15 @@
+
+    // compat: JDK API gaps (JRuby's Java integration). There is no class loading in a TeaVM program: loadClass
+    // finds the classes TeaVM knows by name, and no resource has a URL.
+    public TClass<?> loadClass(String name) throws TClassNotFoundException {
+        return TClass.forName((TString) (Object) name);
+    }
+
+    public java.net.URL getResource(String name) {
+        return null;
+    }
+
+    protected static boolean registerAsParallelCapable() {
+        return true;
+    }
+}

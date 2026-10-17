@@ -1,0 +1,25 @@
+
+    // compat: JDK API gap, multi-dimensional arrays (JRuby's Java::int[2, 3].new)
+    public static Object newInstance(Class<?> componentType, int... dimensions) throws TIllegalArgumentException,
+            TNegativeArraySizeException {
+        if (dimensions.length == 0) {
+            throw new TIllegalArgumentException();
+        }
+        return newMultiArray(componentType, dimensions, 0);
+    }
+
+    private static Object newMultiArray(Class<?> componentType, int[] dimensions, int index) {
+        if (index == dimensions.length - 1) {
+            return newInstance(componentType, dimensions[index]);
+        }
+        Class<?> itemType = componentType;
+        for (int i = index + 1; i < dimensions.length; i++) {
+            itemType = newInstance(itemType, 0).getClass();
+        }
+        Object[] result = (Object[]) newInstance(itemType, dimensions[index]);
+        for (int i = 0; i < result.length; i++) {
+            result[i] = newMultiArray(componentType, dimensions, index + 1);
+        }
+        return result;
+    }
+}

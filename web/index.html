@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JRuby in the browser (TeaVM)</title>
+<style>
+  :root { --bg:#fafaf7; --fg:#1d1d1b; --muted:#6b6b66; --accent:#b3261e; --panel:#fff; --border:#ddd9cf; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#1b1b19; --fg:#ecebe6; --muted:#a3a29b; --accent:#f28b82; --panel:#262624; --border:#3a3936; } }
+  body { margin:0; padding:1.5rem 1rem; background:var(--bg); color:var(--fg); font:15px/1.45 system-ui, sans-serif; }
+  main { max-width: 52rem; margin: 0 auto; }
+  h1 { font-size:1.3rem; margin:0 0 .25rem; }
+  p.sub { margin:0 0 1rem; color:var(--muted); }
+  a { color: var(--accent); }
+  textarea, pre { width:100%; box-sizing:border-box; font:13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+    background:var(--panel); color:var(--fg); border:1px solid var(--border); border-radius:6px; padding:.6rem .7rem; }
+  textarea { height: 13rem; resize: vertical; }
+  pre { min-height: 6rem; white-space: pre-wrap; overflow-x:auto; margin:.6rem 0 0; }
+  .row { display:flex; gap:.6rem; align-items:center; flex-wrap:wrap; margin:.6rem 0 0; }
+  button { font:inherit; padding:.4rem 1rem; border-radius:6px; border:1px solid var(--accent); background:var(--accent); color:#fff; cursor:pointer; }
+  button:disabled { opacity:.5; cursor:default; }
+  #status { color:var(--muted); font-size:.9rem; }
+  .err { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <h1>JRuby 10.1 in your browser</h1>
+  <p class="sub">The real JRuby interpreter compiled to JavaScript with TeaVM. Ctrl+Enter runs the code.
+    <a href="java.html">Ruby calling Java</a> &middot; <a href="visual.html">Ruby driving Java libraries: JBox2D physics, ZXing QR codes</a></p>
+  <textarea id="code" spellcheck="false">class Greeter
+  def initialize(name) = @name = name
+  def hi = "Hello, #{@name}!"
+end
+
+puts Greeter.new("TeaVM").hi
+puts [1, 2, 3].map { |x| x * 2 }.inspect
+require 'set'
+p Set[1, 2] | Set[3]
+require 'erb'
+puts ERB.new("1 + 2 = <%= 1 + 2 %>").result
+RUBY_DESCRIPTION</textarea>
+  <div class="row"><button id="run" disabled>Run</button><span id="status">loading jruby.js...</span></div>
+  <pre id="out" aria-live="polite"></pre>
+</main>
+<script type="module">
+  const $ = (id) => document.getElementById(id);
+  const status = (m) => { $('status').textContent = m; };
+  let api;
+  const evalAsync = (code) => new Promise((resolve) => api.rubyEvalAsync(code, (json) => resolve(JSON.parse(json))));
+  async function run() {
+    const t = performance.now();
+    $('run').disabled = true;
+    const r = await evalAsync($('code').value);
+    $('run').disabled = false;
+    const out = $('out');
+    out.textContent = r.out;
+    if (r.error) {
+      const e = document.createElement('span'); e.className = 'err'; e.textContent = r.error; out.append(e);
+    } else {
+      out.append('=> ' + r.result);
+    }
+    status('ran in ' + Math.round(performance.now() - t) + ' ms');
+    return r;
+  }
+  window.jrubyEval = evalAsync;      // async: runs on a TeaVM thread, so Fiber/Thread/sleep work
+  window.jrubyEvalSync = (code) => JSON.parse(api.rubyEval(code)); // sync: only for code that never blocks
+  try {
+    Error.stackTraceLimit = 60;
+    const t0 = performance.now();
+    api = await import('./jruby.js');
+    api.main([]);
+    status('loading stdlib.zip...');
+    const zip = new Int8Array(await (await fetch('stdlib.zip')).arrayBuffer());
+    api.mountZip(zip, '/jruby');
+    status('booting JRuby...');
+    const desc = JSON.parse(await new Promise((resolve) => api.bootAsync(resolve))).description;
+    window.__jrubyBootMs = Math.round(performance.now() - t0);
+    status(desc + ' (ready in ' + window.__jrubyBootMs + ' ms)');
+    $('run').disabled = false;
+    $('run').onclick = run;
+    $('code').addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); run(); } });
+    window.__jrubyReady = true;
+    console.log('jruby ready: ' + desc);
+  } catch (e) {
+    status('failed: ' + e);
+    console.error(e);
+    window.__jrubyError = String(e);
+  }
+</script>
+</body>
+</html>

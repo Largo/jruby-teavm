@@ -1,0 +1,326 @@
+[
+ {
+  "name": "puts 1+1",
+  "code": "puts 1+1",
+  "out": "2\n"
+ },
+ {
+  "name": "map",
+  "code": "p [1,2,3].map { |x| x * 2 }",
+  "out": "[2, 4, 6]\n"
+ },
+ {
+  "name": "fib(20)",
+  "code": "def fib(n) = n < 2 ? n : fib(n-1) + fib(n-2)\nputs fib(20)",
+  "out": "6765\n"
+ },
+ {
+  "name": "class + method",
+  "code": "class Greeter; def initialize(n) = @n = n; def hi = \"Hello, #{@n}!\"; end\nputs Greeter.new(\"TeaVM\").hi",
+  "out": "Hello, TeaVM!\n"
+ },
+ {
+  "name": "hash",
+  "code": "puts({a: 1}.to_a.inspect)",
+  "out": "[[:a, 1]]\n"
+ },
+ {
+  "name": "raise/rescue",
+  "code": "begin; raise \"boom\"; rescue => e; puts \"rescued #{e.message}\"; end",
+  "out": "rescued boom\n"
+ },
+ {
+  "name": "RUBY_VERSION",
+  "code": "puts RUBY_VERSION",
+  "out": "4.0.0\n"
+ },
+ {
+  "name": "utf-8 upcase",
+  "code": "puts 'héllo'.upcase",
+  "out": "HÉLLO\n"
+ },
+ {
+  "name": "require set",
+  "code": "require 'set'; p Set[1,2] | Set[3]",
+  "out": "Set[1, 2, 3]\n"
+ },
+ {
+  "name": "require ostruct",
+  "code": "require 'ostruct'; p OpenStruct.new(a: 1).a",
+  "out": "1\n"
+ },
+ {
+  "name": "require erb",
+  "code": "require 'erb'; puts ERB.new('<%= 1+2 %>').result",
+  "out": "3\n"
+ },
+ {
+  "name": "uncaught error is reported",
+  "code": "raise ArgumentError, 'nope'",
+  "error_re": "^ArgumentError: nope"
+ },
+ {
+  "name": "string formatting",
+  "code": "puts format('%05.1f|%-4s|%x', 3.14159, 'ab', 255)",
+  "out": "003.1|ab  |ff\n"
+ },
+ {
+  "name": "bignum",
+  "code": "puts 2**100",
+  "out": "1267650600228229401496703205376\n"
+ },
+ {
+  "name": "regexp",
+  "code": "puts 'a1b22c333'.scan(/\\d+/).inspect",
+  "out": "[\"1\", \"22\", \"333\"]\n"
+ },
+ {
+  "name": "struct + sort_by",
+  "code": "P = Struct.new(:n, :a); puts [P.new('x', 3), P.new('y', 1)].sort_by(&:a).map(&:n).join(',')",
+  "out": "y,x\n"
+ },
+ {
+  "name": "Comparable/Enumerable",
+  "code": "puts (1..10).each_slice(3).map(&:sum).inspect",
+  "out": "[6, 15, 24, 10]\n"
+ },
+ {
+  "name": "Time/strftime",
+  "code": "puts Time.at(0).utc.strftime('%Y-%m-%d %H:%M:%S')",
+  "out": "1970-01-01 00:00:00\n"
+ },
+ {
+  "name": "require json-less stdlib (shellwords)",
+  "code": "require 'shellwords'; p 'a \"b c\" d'.shellsplit",
+  "out": "[\"a\", \"b c\", \"d\"]\n"
+ },
+ {
+  "name": "StringIO",
+  "code": "require 'stringio'; io = StringIO.new; io.puts 'hi'; io.print 42; p io.string",
+  "out": "\"hi\\n42\"\n"
+ },
+ {
+  "name": "File in VFS",
+  "code": "File.write('/tmp/x.txt', \"a\\nb\\n\"); p File.readlines('/tmp/x.txt', chomp: true)",
+  "out": "[\"a\", \"b\"]\n"
+ },
+ {
+  "name": "Enumerator#next (fiber)",
+  "code": "e = [1,2,3].each; p e.next, e.next",
+  "out": "1\n2\n",
+  "blocking": true
+ },
+ {
+  "name": "Fiber",
+  "code": "f = Fiber.new { Fiber.yield 1; 2 }; p f.resume, f.resume",
+  "out": "1\n2\n",
+  "blocking": true
+ },
+ {
+  "name": "Thread#value",
+  "code": "p Thread.new { 40 + 2 }.value",
+  "out": "42\n",
+  "blocking": true
+ },
+ {
+  "name": "Data + pattern matching",
+  "code": "D = Data.define(:x, :y)\ncase D.new(x: 1, y: 2)\nin {x: Integer => a, y:}\n  p [a, y]\nend",
+  "out": "[1, 2]\n"
+ },
+ {
+  "name": "Marshal round trip",
+  "code": "p Marshal.load(Marshal.dump([1, 's', :sym, {a: 2}]))",
+  "out": "[1, \"s\", :sym, {a: 2}]\n"
+ },
+ {
+  "name": "floats",
+  "code": "p 3.14, 1e20, 10.0/3, -2.5",
+  "out": "3.14\n1.0e+20\n3.3333333333333335\n-2.5\n"
+ },
+ {
+  "name": "require date",
+  "code": "require 'date'; puts Date.new(2026, 10, 16).strftime('%a %d %b %Y'), (Date.new(2026,1,1) + 45).to_s",
+  "out": "Fri 16 Oct 2026\n2026-02-15\n"
+ },
+ {
+  "name": "require strscan",
+  "code": "require 'strscan'; s = StringScanner.new('3 + 4'); p s.scan(/\\d+/), s.scan(/\\s*\\+\\s*/), s.scan(/\\d+/)",
+  "out": "\"3\"\n\" + \"\n\"4\"\n"
+ },
+ {
+  "name": "require forwardable/delegate",
+  "code": "require 'forwardable'; class Q; extend Forwardable; def_delegators :@a, :size, :<<; def initialize = @a = []; end; q = Q.new; q << 1 << 2; p q.size",
+  "out": "2\n"
+ },
+ {
+  "name": "time zones (joda tz data)",
+  "code": "t = Time.at(0).localtime('+09:00'); p t.hour; ENV['TZ'] = 'America/New_York'; p Time.at(0).hour; ENV['TZ'] = nil",
+  "out": "9\n19\n"
+ },
+ {
+  "name": "Queue#pop waits for producer",
+  "code": "q = Queue.new; t = Thread.new { sleep 0.01; q << :item }; p q.pop; t.join",
+  "out": ":item\n",
+  "blocking": true
+ },
+ {
+  "name": "Mutex held across sleep",
+  "code": "m = Mutex.new; log = []; a = Thread.new { m.synchronize { log << :a1; sleep 0.02; log << :a2 } }; sleep 0.005; m.synchronize { log << :main }; a.join; p log",
+  "out": "[:a1, :a2, :main]\n",
+  "blocking": true
+ },
+ {
+  "name": "ConditionVariable",
+  "code": "m = Mutex.new; cv = ConditionVariable.new; ready = false; t = Thread.new { m.synchronize { ready = true; cv.signal } }; m.synchronize { cv.wait(m) until ready }; t.join; p ready",
+  "out": "true\n",
+  "blocking": true
+ },
+ {
+  "name": "Thread#wakeup",
+  "code": "t = Thread.new { sleep; :woke }; sleep 0.01; t.wakeup; p t.value",
+  "out": ":woke\n",
+  "blocking": true
+ },
+ {
+  "name": "Thread.main is the eval thread",
+  "code": "p Thread.main == Thread.current, Thread.current.alive?",
+  "out": "true\ntrue\n"
+ },
+ {
+  "name": "sleep with timeout",
+  "code": "t = Time.now; sleep 0.05; p (Time.now - t) >= 0.04",
+  "out": "true\n",
+  "blocking": true
+ },
+ {
+  "name": "java: loads on first use",
+  "code": "p $LOADED_FEATURES.any? { |f| f.end_with?('/java.rb') }\nlist = java.util.ArrayList.new\np $LOADED_FEATURES.any? { |f| f.end_with?('/java.rb') }\np require('java')",
+  "out": "false\ntrue\nfalse\n"
+ },
+ {
+  "name": "java: JRUBY_VERSION + java.vendor",
+  "code": "puts JRUBY_VERSION, java.lang.System.getProperty('java.vendor')",
+  "out": "10.1.2.0\nTeaVM\n"
+ },
+ {
+  "name": "java: ArrayList is Enumerable",
+  "code": "l = java.util.ArrayList.new\nl.add(3); l << 1; l.add(2)\np l.size, l.to_a, l.map { |x| x * 10 }, l.include?(2), l.class",
+  "out": "3\n[3, 1, 2]\n[30, 10, 20]\ntrue\nJava::JavaUtil::ArrayList\n"
+ },
+ {
+  "name": "java: java_import HashMap, each_pair",
+  "code": "java_import 'java.util.HashMap'\nm = HashMap.new\nm.put('a', 1); m['b'] = 2\nm.each_pair { |k, v| puts \"#{k}=#{v}\" }\np m.get('missing'), m.to_h",
+  "out": "a=1\nb=2\nnil\n{\"a\" => 1, \"b\" => 2}\n"
+ },
+ {
+  "name": "java: overloads + static calls",
+  "code": "puts Java::JavaLang::StringBuilder.new('x').append(1).append(2.5).append(true).to_s\np java.lang.Math.max(3, 7), java.lang.Math.abs(-2.5), java.lang.Math.abs(-5)\np java.lang.StringBuilder.new(10).length, java.lang.StringBuilder.new('abc').reverse.to_s\np java.lang.Integer.toString(255, 16), java.lang.Integer.parseInt('42') + 1",
+  "out": "x12.5true\n7\n2.5\n5\n0\n\"cba\"\n\"ff\"\n43\n"
+ },
+ {
+  "name": "java: Ruby <-> Java conversions",
+  "code": "l = java.util.ArrayList.new\n['s', 42, 2.5, true, nil, 2**70].each { |x| l.add(x) }\nl.each { |x| print x.class, ' ' }\nputs\np java.lang.Integer::MAX_VALUE, java.lang.Long::MAX_VALUE",
+  "out": "String Integer Float TrueClass NilClass Integer \n2147483647\n9223372036854775807\n"
+ },
+ {
+  "name": "java: rescue Java exceptions",
+  "code": "begin\n  java.math.BigInteger.new('1').divide(java.math.BigInteger.new('0'))\nrescue java.lang.ArithmeticException => e\n  puts \"#{e.class}: #{e.message}\"\nend\nbegin\n  java.lang.Integer.parseInt('abc')\nrescue => e\n  puts e.class\nend",
+  "out": "Java::JavaLang::ArithmeticException: BigInteger divide by zero\nJava::JavaLang::NumberFormatException\n"
+ },
+ {
+  "name": "java: uncaught Java exception",
+  "code": "java.lang.Integer.parseInt('zz')",
+  "error_re": "^Java::JavaLang::NumberFormatException: "
+ },
+ {
+  "name": "java: class not in java-classes.txt",
+  "code": "java.util.LinkedList.new",
+  "error_re": "^NameError: missing class name java.util.LinkedList \\(not in this build's java-classes.txt\\)"
+ },
+ {
+  "name": "java: BigDecimal + BigInteger",
+  "code": "a = java.math.BigDecimal.new('0.1')\nputs a.add(java.math.BigDecimal.new('0.2'))\ntotal = java.math.BigDecimal.new('19.99').multiply(java.math.BigDecimal.new(3))\nputs total, total.setScale(1, java.math.RoundingMode::HALF_UP)\np java.math.BigInteger.new('2').pow(100)",
+  "out": "0.3\n59.97\n60.0\n1267650600228229401496703205376\n"
+ },
+ {
+  "name": "java: TreeMap keeps keys sorted",
+  "code": "t = java.util.TreeMap.new\n%w[pear apple fig].each_with_index { |w, i| t.put(w, i) }\np t.keys, t.firstKey\nt.each { |k, v| print k, v }\nputs",
+  "out": "[\"apple\", \"fig\", \"pear\"]\n\"apple\"\napple1fig2pear0\n"
+ },
+ {
+  "name": "java: blocks as Java interfaces",
+  "code": "l = java.util.ArrayList.new([5, 3, 9, 1])\njava.util.Collections.sort(l) { |a, b| b <=> a }\np l.to_a\nl.forEach { |x| print x }\nputs\np java.util.HashMap.new.computeIfAbsent('k') { |k| k * 3 }",
+  "out": "[9, 5, 3, 1]\n9531\n\"kkk\"\n"
+ },
+ {
+  "name": "java: Iface.impl + include Iface",
+  "code": "c = java.util.Comparator.impl { |_name, a, b| a.size <=> b.size }\nl = java.util.ArrayList.new(%w[ccc a bb])\njava.util.Collections.sort(l, c)\np l.to_a\nclass Sizes\n  include Java::Demo::Listener\n  attr_reader :rows\n  def initialize = @rows = []\n  def row(y, its) = @rows << [y, its.length]\nend\ns = Sizes.new\np Java::Demo::Mandelbrot.new(5, 3).render(s), s.rows",
+  "out": "[\"a\", \"bb\", \"ccc\"]\n15\n[[0, 5], [1, 5], [2, 5]]\n"
+ },
+ {
+  "name": "java: demo.Mandelbrot calls a Ruby block",
+  "code": "m = Java::Demo::Mandelbrot.new(30, 9, 30)\nm.render { |y, its| puts its.map { |n| n == 30 ? '#' : '.' }.join }\np m.max_iterations, Java::Demo::Mandelbrot.iterations(0.0, 0.0, 50), m.to_s",
+  "out": "..............................\n...................##.........\n................########......\n...............##########.....\n.........################.....\n.........################.....\n...............##########.....\n................########......\n...................##.........\n30\n50\n\"Mandelbrot[30x9, maxIterations=30]\"\n"
+ },
+ {
+  "name": "java: AtomicLong",
+  "code": "a = java.util.concurrent.atomic.AtomicLong.new(5)\na.incrementAndGet\np a.addAndGet(10), a.compareAndSet(16, 1), a.get",
+  "out": "16\ntrue\n1\n"
+ },
+ {
+  "name": "java: Java arrays",
+  "code": "b = [3, 1, 2].to_java(:int)\njava.util.Arrays.sort(b)\np b.to_a, java.util.Arrays.toString(b), java.util.Arrays.asList(1, 2, 3).to_a",
+  "out": "[1, 2, 3]\n\"[1, 2, 3]\"\n[1, 2, 3]\n"
+ },
+ {
+  "name": "java: System.out goes to the output",
+  "code": "java.lang.System.out.println('from Java')\nputs 'from Ruby'",
+  "out": "from Java\nfrom Ruby\n"
+ },
+ {
+  "name": "java: no Ruby subclasses of Java classes",
+  "code": "class MyList < java.util.ArrayList; end\nMyList.new",
+  "error_re": "^TypeError: requested class MyList was not reifiable"
+ },
+ {
+  "name": "java: Map#forEach, merge, compute",
+  "code": "h = java.util.TreeMap.new\nh.put('a', 1); h.put('b', 2)\nh.forEach { |k, v| print k, v }\nputs\nh.merge('a', 10) { |old, new| old + new }\nh.compute('c') { |k, v| (v || 0) + 7 }\np h.to_h",
+  "out": "a1b2\n{\"a\" => 11, \"b\" => 2, \"c\" => 7}\n"
+ },
+ {
+  "name": "java: unlisted interface: clear error",
+  "code": "java.util.ArrayList.new([1, 2]).removeIf { |x| x > 1 }",
+  "error_re": "^TypeError: cannot implement java.util.function.Predicate in Ruby"
+ },
+ {
+  "name": "visual: JBox2D body falls, then rests",
+  "code": "java_import org.jbox2d.common.Vec2\njava_import org.jbox2d.dynamics.World\njava_import org.jbox2d.dynamics.BodyDef\njava_import org.jbox2d.dynamics.BodyType\njava_import org.jbox2d.collision.shapes.PolygonShape\ndef add_box(world, type, x, y, hw, hh)\n  d = BodyDef.new\n  d.type = type\n  d.position.set(x, y)\n  body = world.create_body(d)\n  shape = PolygonShape.new\n  shape.set_as_box(hw, hh)\n  body.create_fixture(shape, 1.0)\n  body\nend\nworld = World.new(Vec2.new(0, -10))\nadd_box(world, BodyType::STATIC, 0, 0.5, 10, 0.5)\nbox = add_box(world, BodyType::DYNAMIC, 0, 10, 0.5, 0.5)\ntag = Object.new\nbox.user_data = tag\n60.times { world.step(1.0 / 60, 8, 3) }\np box.position.y < 10, (10 - box.position.y).round(1)\n240.times { world.step(1.0 / 60, 8, 3) }\np box.position.y.round(1), box.awake?, box.user_data.equal?(tag), world.body_count",
+  "out": "true\n5.1\n1.5\nfalse\ntrue\n2\n"
+ },
+ {
+  "name": "visual: ZXing QR round trip (UTF-8)",
+  "code": "java_import com.google.zxing.BarcodeFormat\njava_import com.google.zxing.EncodeHintType\njava_import com.google.zxing.BinaryBitmap\njava_import com.google.zxing.RGBLuminanceSource\njava_import com.google.zxing.common.HybridBinarizer\njava_import com.google.zxing.qrcode.QRCodeWriter\njava_import com.google.zxing.qrcode.QRCodeReader\ntext = \"Grüezi from JRuby ✓ 日本\"\nm = QRCodeWriter.new.encode(text, BarcodeFormat::QR_CODE, 0, 0, { EncodeHintType::CHARACTER_SET => \"UTF-8\" })\nn = m.width\npx = (0...n * 2).flat_map { |y| (0...n * 2).map { |x| m.get(x / 2, y / 2) ? 0 : 0xFFFFFF } }\nr = QRCodeReader.new.decode(BinaryBitmap.new(HybridBinarizer.new(RGBLuminanceSource.new(n * 2, n * 2, px.to_java(:int)))))\np r.text == text, r.text.encoding, r.barcode_format.to_s, r.result_points.length >= 3",
+  "out": "true\n#<Encoding:UTF-8>\n\"QR_CODE\"\ntrue\n"
+ },
+ {
+  "name": "visual: ZXing ReaderException rescue",
+  "code": "blank = com.google.zxing.RGBLuminanceSource.new(40, 40, Array.new(1600, 0xFFFFFF).to_java(:int))\nbitmap = com.google.zxing.BinaryBitmap.new(com.google.zxing.common.HybridBinarizer.new(blank))\nbegin\n  com.google.zxing.qrcode.QRCodeReader.new.decode(bitmap)\nrescue com.google.zxing.ReaderException => e\n  puts \"no QR code: #{e.class}\"\nend",
+  "out": "no QR code: Java::ComGoogleZxing::NotFoundException\n"
+ },
+ {
+  "name": "visual: Canvas2D draws (pixel read back)",
+  "code": "c = Java::Demo::Canvas2D.new(\"test-canvas\")\nc.clear(\"#ffffff\")\nc.color = \"#e4572e\"\nc.fill_rect(2, 2, 6, 6).fill_circle(15, 5, 3)\nc.color = \"#29335c\"\nc.fill_polygon(10, 9, 13, 9, 10, 6)             # varargs: x1, y1, x2, y2, ...\np c.width, c.height, c.color\nputs [[4, 4], [15, 5], [10.5, 8.5], [10, 1]].map { |x, y| c.pixel(x, y).to_s(16) }.join(\" \")",
+  "out": "20\n10\n\"#29335c\"\ne4572e e4572e 29335c ffffff\n"
+ },
+ {
+  "name": "visual: Canvas2D.animate runs a block",
+  "code": "c = Java::Demo::Canvas2D.new(\"test-canvas\")\ndts = []\nc.animate { |dt| dts << dt; c.stop if dts.size == 3 }\n50.times { break if dts.size >= 3; sleep 0.02 }\nsleep 0.1\np dts.size, dts.all? { |dt| dt > 0 && dt <= 0.1 }, c.running?",
+  "out": "3\ntrue\nfalse\n",
+  "blocking": true
+ },
+ {
+  "name": "visual: Canvas2D without a canvas",
+  "code": "Java::Demo::Canvas2D.new(\"no-such-canvas\")",
+  "error_re": "^Java::JavaLang::IllegalArgumentException: no <canvas id=\"no-such-canvas\"> in the page"
+ }
+]

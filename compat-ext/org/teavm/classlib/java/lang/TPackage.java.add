@@ -1,0 +1,6 @@
+
+    // compat: JDK API gap (JRuby's JavaPackage#sealed?); there are no sealed (jar) packages in the browser
+    public boolean isSealed() {
+        return false;
+    }
+}

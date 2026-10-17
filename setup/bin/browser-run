@@ -1,0 +1,220 @@
+#!/usr/bin/env node
+// browser-run: load a page in headless Chromium (Playwright) and print what it did.
+//
+//   browser-run <dir | file.html | http://url> [options]
+//
+// A dir or file is served over HTTP on 127.0.0.1 (random port, never public);
+// file:// is avoided because fetch()/WebAssembly.instantiateStreaming need http
+// and the application/wasm MIME type.
+//
+// Output (stdout), one line per event, in order:
+//   [console.log] hello from teavm
+//   [console.error] ...
+//   [pageerror] Uncaught ...           (uncaught exceptions)
+//   [requestfailed] url reason / [http 404] url
+//   [dom] <document.body.innerText>    (with --dom, or --selector)
+//   [eval] <JSON of --eval result>
+//   [result] ok|timeout|error  elapsed=..ms
+//
+// Options:
+//   --page <name>        page inside the dir to open (default index.html)
+//   --timeout <ms>       hard limit (default 30000)
+//   --wait-for <regex>   finish as soon as a console line matches
+//   --idle <ms>          otherwise finish after load + this long with no new console output (default 1500)
+//   --done-global <name> also finish when window[name] becomes truthy (default __done)
+//   --dom                print document.body.innerText at the end
+//   --selector <css>     print innerText of this element at the end (implies --dom)
+//   --eval <js>          evaluate expression in the page at the end, print JSON result
+//   --isolate            send COOP/COEP headers (crossOriginIsolated => SharedArrayBuffer)
+//   --headed             not headless (needs a display; rarely useful here)
+//   --quiet-network      do not report failed requests / HTTP errors
+//   --json               print one JSON object instead of lines
+//   --fail-on-error      exit 1 if any pageerror or console.error occurred
+//   --chrome-arg <arg>   extra Chromium flag (repeatable), e.g. --js-flags=--stack-size=4000
+//
+// Exit codes: 0 ok, 1 error/fail-on-error, 2 timeout (wait-for not seen), 3 usage.
+
+'use strict';
+process.stdout.on('error', e => { if (e.code === 'EPIPE') process.exit(0); throw e; });
+const fs = require('fs');
+const path = require('path');
+const http = require('http');
+
+function loadPlaywright() {
+  const candidates = [
+    'playwright',
+    '/usr/local/lib/node_modules/playwright',
+    path.join(__dirname, '..', 'tools', 'node_modules', 'playwright'),
+  ];
+  for (const c of candidates) {
+    try { return require(c); } catch (e) { /* next */ }
+  }
+  console.error('browser-run: cannot find the "playwright" node module (tried ' + candidates.join(', ') + ')');
+  console.error('  fix: npm install -g playwright@1.60.0   (browsers already in ~/.cache/ms-playwright)');
+  process.exit(3);
+}
+
+function parseArgs(argv) {
+  const o = { page: 'index.html', timeout: 30000, idle: 1500, doneGlobal: '__done', chromeArgs: [] };
+  const rest = [];
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    const val = () => { if (i + 1 >= argv.length) usage('missing value for ' + a); return argv[++i]; };
+    switch (a) {
+      case '--page': o.page = val(); break;
+      case '--timeout': o.timeout = +val(); break;
+      case '--wait-for': o.waitFor = new RegExp(val()); break;
+      case '--idle': o.idle = +val(); break;
+      case '--done-global': o.doneGlobal = val(); break;
+      case '--dom': o.dom = true; break;
+      case '--selector': o.selector = val(); o.dom = true; break;
+      case '--eval': o.evalExpr = val(); break;
+      case '--isolate': o.isolate = true; break;
+      case '--headed': o.headed = true; break;
+      case '--quiet-network': o.quietNetwork = true; break;
+      case '--json': o.json = true; break;
+      case '--fail-on-error': o.failOnError = true; break;
+      case '--chrome-arg': o.chromeArgs.push(val()); break;
+      case '-h': case '--help': usage(); break;
+      default:
+        if (a.startsWith('--')) usage('unknown option ' + a);
+        rest.push(a);
+    }
+  }
+  if (rest.length !== 1) usage();
+  o.target = rest[0];
+  return o;
+}
+
+function usage(msg) {
+  if (msg) console.error('browser-run: ' + msg);
+  const src = fs.readFileSync(__filename, 'utf8').split('\n');
+  console.error(src.filter(l => l.startsWith('//')).map(l => l.slice(3)).join('\n'));
+  process.exit(3);
+}
+
+const MIME = {
+  '.html': 'text/html; charset=utf-8', '.htm': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8',
+  '.wasm': 'application/wasm', '.json': 'application/json', '.map': 'application/json',
+  '.css': 'text/css', '.txt': 'text/plain; charset=utf-8', '.rb': 'text/plain; charset=utf-8',
+  '.png': 'image/png', '.svg': 'image/svg+xml', '.jar': 'application/java-archive',
+  '.zip': 'application/zip', '.bin': 'application/octet-stream',
+};
+
+function serve(root, isolate) {
+  root = path.resolve(root);
+  const server = http.createServer((req, res) => {
+    let p = decodeURIComponent(new URL(req.url, 'http://x').pathname);
+    let f = path.normalize(path.join(root, p));
+    if (!f.startsWith(root)) { res.writeHead(403); return res.end(); }
+    try { if (fs.statSync(f).isDirectory()) f = path.join(f, 'index.html'); } catch (e) { /* 404 below */ }
+    fs.readFile(f, (err, data) => {
+      const headers = { 'Cache-Control': 'no-store' };
+      if (isolate) {
+        headers['Cross-Origin-Opener-Policy'] = 'same-origin';
+        headers['Cross-Origin-Embedder-Policy'] = 'require-corp';
+      }
+      if (err) { res.writeHead(404, headers); return res.end('not found'); }
+      headers['Content-Type'] = MIME[path.extname(f).toLowerCase()] || 'application/octet-stream';
+      res.writeHead(200, headers);
+      res.end(data);
+    });
+  });
+  return new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve(server)));
+}
+
+async function main() {
+  const o = parseArgs(process.argv.slice(2));
+  const { chromium } = loadPlaywright();
+
+  let url, server;
+  if (/^https?:\/\//.test(o.target)) {
+    url = o.target;
+  } else {
+    let st;
+    try { st = fs.statSync(o.target); } catch (e) { usage('no such file or dir: ' + o.target); }
+    let dir = o.target, page = o.page;
+    if (!st.isDirectory()) { dir = path.dirname(o.target); page = path.basename(o.target); }
+    server = await serve(dir, o.isolate);
+    url = `http://127.0.0.1:${server.address().port}/${page}`;
+  }
+
+  const events = [];
+  const t0 = Date.now();
+  let lastActivity = Date.now();
+  let errors = 0;
+  let matched = false;
+  const emit = (kind, text) => {
+    lastActivity = Date.now();
+    events.push({ kind, text, t: Date.now() - t0 });
+    if (!o.json) process.stdout.write(`[${kind}] ${text}\n`);
+  };
+
+  const browser = await chromium.launch({ headless: !o.headed, args: o.chromeArgs });
+  const page = await browser.newPage();
+  page.on('console', m => {
+    const type = m.type();
+    if (type === 'error') errors++;
+    const text = m.text();
+    emit('console.' + type, text);
+    if (o.waitFor && o.waitFor.test(text)) matched = true;
+  });
+  page.on('pageerror', e => { errors++; emit('pageerror', (e.stack || String(e))); });
+  page.on('crash', () => { errors++; emit('crash', 'page crashed'); });
+  if (!o.quietNetwork) {
+    page.on('requestfailed', r => emit('requestfailed', r.url() + ' ' + (r.failure() ? r.failure().errorText : '')));
+    page.on('response', r => { if (r.status() >= 400) emit('http ' + r.status(), r.url()); });
+  }
+
+  let status = 'ok';
+  try {
+    await page.goto(url, { waitUntil: 'load', timeout: o.timeout });
+    lastActivity = Date.now();
+    // poll for a finish condition
+    for (;;) {
+      if (matched) break;
+      let done = false;
+      try { done = await page.evaluate(n => !!window[n], o.doneGlobal); } catch (e) { /* page busy / navigating */ }
+      if (done) break;
+      if (!o.waitFor && Date.now() - lastActivity >= o.idle) break;
+      if (Date.now() - t0 >= o.timeout) { status = 'timeout'; break; }
+      await new Promise(r => setTimeout(r, 50));
+    }
+  } catch (e) {
+    status = 'error';
+    emit('harness-error', String(e && e.message || e));
+  }
+
+  // the page may still be busy in a long synchronous loop; give evaluation a bounded window
+  const bounded = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('page unresponsive')), ms))]);
+  let dom, evalResult;
+  if (o.dom) {
+    try {
+      dom = await bounded(page.evaluate(sel => {
+        const el = sel ? document.querySelector(sel) : document.body;
+        return el ? el.innerText : null;
+      }, o.selector || null), 5000);
+      if (!o.json) process.stdout.write(`[dom] ${dom}\n`);
+    } catch (e) { emit('harness-error', 'dom: ' + e.message); }
+  }
+  if (o.evalExpr) {
+    try {
+      evalResult = await bounded(page.evaluate(o.evalExpr), 5000);
+      if (!o.json) process.stdout.write(`[eval] ${JSON.stringify(evalResult)}\n`);
+    } catch (e) { emit('harness-error', 'eval: ' + e.message); }
+  }
+  const elapsed = Date.now() - t0;
+  if (o.json) {
+    process.stdout.write(JSON.stringify({ url, status, elapsed, errors, events, dom, eval: evalResult }) + '\n');
+  } else {
+    process.stdout.write(`[result] ${status} elapsed=${elapsed}ms errors=${errors} url=${url}\n`);
+  }
+  await browser.close().catch(() => {});
+  if (server) server.close();
+  if (status === 'timeout' && o.waitFor) process.exit(2);
+  if (status === 'error' || (o.failOnError && errors > 0)) process.exit(1);
+  process.exit(0);
+}
+
+main().catch(e => { console.error('browser-run: ' + (e.stack || e)); process.exit(1); });

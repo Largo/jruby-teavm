@@ -1,0 +1,15 @@
+// Copies the TeaVM 0.16.0 CLI (thin jar) + all runtime deps + JSO API jars into ../../jars/teavm/lib
+// (the published cli-0.16.0-all.jar is broken: its META-INF/services/org.teavm.vm.spi.TeaVMPlugin
+//  only lists JCLPlugin, so PlatformPlugin/JSOPlugin never load -> "Service not registered: MetadataRegistration")
+plugins { id 'java' }
+repositories { mavenCentral() }
+configurations { tv { extendsFrom configurations.runtimeClasspath; canBeConsumed = false; attributes { attribute(Bundling.BUNDLING_ATTRIBUTE, objects.named(Bundling, Bundling.EXTERNAL)); attribute(Usage.USAGE_ATTRIBUTE, objects.named(Usage, Usage.JAVA_RUNTIME)) } } }
+dependencies {
+  tv 'org.teavm:cli:0.16.0'
+  tv 'org.teavm:teavm-classlib:0.16.0'
+  tv 'org.teavm:teavm-jso-apis:0.16.0'
+  tv 'org.teavm:teavm-jso-impl:0.16.0'
+  tv 'org.teavm:teavm-platform:0.16.0'
+  tv 'org.teavm:teavm-metaprogramming-impl:0.16.0'
+}
+tasks.register('copyDeps', Sync) { from configurations.tv; into "${projectDir}/../../jars/teavm/lib" }

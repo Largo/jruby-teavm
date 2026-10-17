@@ -1,0 +1,970 @@
+package org.jruby.ext.fiber;
+
+import org.jruby.Ruby;
+import org.jruby.RubyArray;
+import org.jruby.RubyBasicObject;
+import org.jruby.RubyClass;
+import org.jruby.RubyException;
+import org.jruby.RubyFixnum;
+import org.jruby.RubyHash;
+import org.jruby.RubyKernel;
+import org.jruby.RubyObject;
+import org.jruby.RubySymbol;
+import org.jruby.RubyThread;
+import org.jruby.anno.JRubyMethod;
+import org.jruby.ast.util.ArgsUtil;
+import org.jruby.exceptions.FiberKill;
+import org.jruby.exceptions.JumpException;
+import org.jruby.exceptions.RaiseException;
+import org.jruby.ir.operands.IRException;
+import org.jruby.ir.runtime.IRBreakJump;
+import org.jruby.ir.runtime.IRReturnJump;
+import org.jruby.javasupport.JavaUtil;
+import org.jruby.runtime.Block;
+import org.jruby.runtime.ExecutionContext;
+import org.jruby.runtime.Helpers;
+import org.jruby.runtime.RubyEvent;
+import org.jruby.runtime.ThreadContext;
+import org.jruby.runtime.Visibility;
+import org.jruby.runtime.builtin.IRubyObject;
+import org.jruby.util.cli.Options;
+import org.jruby.util.log.Logger;
+import org.jruby.util.log.LoggerFactory;
+
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
+import java.lang.ref.WeakReference;
+import java.lang.reflect.Method;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiConsumer;
+
+import org.jruby.RubyString;
+import static org.jruby.api.Convert.asBoolean;
+import static org.jruby.util.Inspector.inspectPrefix;
+import static org.jruby.api.Convert.castAsHash;
+import static org.jruby.api.Create.newHash;
+import static org.jruby.api.Error.*;
+import static org.jruby.api.Warn.warnExperimental;
+
+public class ThreadFiber extends RubyObject implements ExecutionContext {
+
+    private static final Logger LOG = LoggerFactory.getLogger(ThreadFiber.class);
+
+    private static final BiConsumer<Ruby, Runnable> FIBER_LAUNCHER;
+    private static final String[] INITIALIZE_KWARGS = {"blocking", "pool", "storage"};
+
+    static {
+        BiConsumer<Ruby, Runnable> fiberLauncher;
+
+        fiberLauncher = ThreadFiber::nativeThreadLauncher; // TEAVM: no virtual threads
+
+        FIBER_LAUNCHER = fiberLauncher;
+    }
+
+    private static void nativeThreadLauncher(Ruby runtime, Runnable runnable) {
+        runtime.getFiberExecutor().execute(runnable); // TEAVM: plain Executor
+    }
+
+    // TEAVM: virtualThreadLauncher removed (no Thread.ofVirtual)
+
+    public boolean isBlocking() {
+        return data.blocking;
+    }
+
+    public ThreadFiber(Ruby runtime, RubyClass klass) {
+        this(runtime, klass, false);
+    }
+
+    public ThreadFiber(Ruby runtime, RubyClass klass, boolean root) {
+        super(runtime, klass);
+
+        this.root = root;
+    }
+
+    public static void initRootFiber(ThreadContext context, RubyThread currentThread) {
+        Ruby runtime = context.runtime;
+
+        ThreadFiber rootFiber = new ThreadFiber(runtime, runtime.getFiber(), true);
+
+        rootFiber.data = new FiberData(new FiberQueue(runtime), currentThread, rootFiber, true);
+        rootFiber.data.started = true;
+        rootFiber.thread = currentThread;
+        context.setRootFiber(rootFiber);
+    }
+
+    @JRubyMethod(visibility = Visibility.PRIVATE)
+    public IRubyObject initialize(ThreadContext context, Block block) {
+        Ruby runtime = context.runtime;
+
+        if (!block.isGiven()) throw argumentError(context, "tried to create Proc object without block");
+
+        inheritFiberStorage(context);
+
+        setSourceLocation(block);
+        data = new FiberData(new FiberQueue(runtime), context.getFiberCurrentThread(), this, false);
+
+        FiberData currentFiberData = context.getFiber().data;
+
+        thread = createThread(context, data, currentFiberData.queue, block);
+
+        return context.nil;
+    }
+
+    @JRubyMethod(visibility = Visibility.PRIVATE)
+    public IRubyObject initialize(ThreadContext context, IRubyObject _opts, Block block) {
+        if (!block.isGiven()) throw argumentError(context, "tried to create Proc object without block");
+
+        IRubyObject opts = ArgsUtil.getOptionsArg(context, _opts);
+        boolean blocking = false;
+
+        if (!opts.isNil()) {
+            IRubyObject[] blockingPoolOpt = ArgsUtil.extractKeywordArgs(context, opts, INITIALIZE_KWARGS);
+
+            if (blockingPoolOpt != null) {
+                IRubyObject blockingOpt = blockingPoolOpt[0];
+                if (blockingOpt != null && !blockingOpt.isNil()) {
+                    blocking = blockingOpt.isTrue();
+                }
+
+                // TODO: pooling
+
+                IRubyObject storage = blockingPoolOpt[2];
+
+                if (storage == null || storage == context.tru) {
+                    inheritFiberStorage(context);
+                } else {
+                    setStorage(context, storage);
+                }
+            }
+        }
+
+        setSourceLocation(block);
+        data = new FiberData(new FiberQueue(context.runtime), context.getFiberCurrentThread(), this, blocking);
+
+        FiberData currentFiberData = context.getFiber().data;
+
+        thread = createThread(context, data, currentFiberData.queue, block);
+
+        return context.nil;
+    }
+
+    // MRI: inherit_fiber_storage
+    public void inheritFiberStorage(ThreadContext context) {
+        RubyHash storage = context.getFiber().storage;
+        this.storage = storage == null ? null : (RubyHash) storage.dup(context);
+    }
+    
+    @JRubyMethod(rest = true, keywords = true)
+    public IRubyObject resume(ThreadContext context, IRubyObject[] values) {
+        Ruby runtime = context.runtime;
+
+        if (!alive()) throw runtime.newFiberError("dead fiber called");
+
+        final FiberData data = this.data;
+        ThreadFiber currentFiber = context.getFiber();
+        FiberData currentFiberData = currentFiber.data;
+
+        if (currentFiberData == data) throw runtime.newFiberError("attempt to resume the current fiber");
+        if (data.prev != null) throw runtime.newFiberError("attempt to resume a resumed fiber (double resume)");
+        if (root || data.resumingFiber != null) throw runtime.newFiberError("attempt to resume a resuming fiber");
+        if (data.transferred || data.transferredTo) throw runtime.newFiberError("attempt to resume a transferring fiber");
+        
+        if (data == currentFiberData) {
+            switch (values.length) {
+                case 0: return context.nil;
+                case 1: return values[0];
+                default: return RubyArray.newArrayMayCopy(runtime, values);
+            }
+        }
+        
+        FiberRequest val;
+        switch (values.length) {
+            case 0: val = NEVER; break;
+            case 1: val = new FiberRequest(values[0], RequestType.DATA); break;
+            default: val = new FiberRequest(RubyArray.newArrayMayCopy(runtime, values), RequestType.DATA);
+        }
+        
+        if (data.parent != context.getFiberCurrentThread()) fiberCalledAcrossThreads(runtime);
+
+        data.prev = currentFiber;
+        currentFiberData.resumingFiber = this;
+
+        FiberRequest result;
+        try {
+            result = exchangeWithFiber(context, currentFiberData, data, val);
+        } finally {
+            data.prev = null;
+            currentFiberData.resumingFiber = null;
+        }
+
+        if (result.type == RequestType.RAISE) {
+            throw (RuntimeException) result.data;
+        }
+
+        return processResultData(context, result);
+    }
+
+    private static void fiberCalledAcrossThreads(Ruby runtime) {
+        throw runtime.newFiberError("fiber called across threads");
+    }
+
+    @JRubyMethod(optional = 4, checkArity = false, keywords = true)
+    public IRubyObject raise(ThreadContext context, IRubyObject[] args) {
+        return raise(context, RubyThread.prepareRaiseException(context, args));
+    }
+
+    public enum RequestType {
+        DATA,
+        RAISE
+    }
+
+    public static class FiberRequest {
+        final Object data;
+        final RequestType type;
+
+        FiberRequest(Object data, RequestType type) {
+            this.data = data;
+            this.type = type;
+        }
+    }
+
+    private static final FiberRequest NEVER = new FiberRequest(RubyBasicObject.NEVER, RequestType.DATA);
+
+    private static FiberRequest exchangeWithFiber(ThreadContext context, FiberData currentFiberData, FiberData targetFiberData, FiberRequest request) {
+        // MRI: fiber_switch. Must precede the push, which wakes the target fiber's thread
+        if (currentFiberData.blocking) context.getFiberCurrentThread().decrementBlocking();
+
+        // push should not block and does not check interrupts
+        targetFiberData.queue.push(context, request);
+
+        // At this point we consider ourselves "in" the resume, so we need to make an effort to propagate any interrupt
+        // raise to the fiber. We forward the exception using the interrupt mechanism and then try once more to let the
+        // fiber deal with the exception and either re-raise it or handle it and give us a non-exceptional result. If
+        // the second pop is interrupted, either the fiber has propagated the exception back to us or we are being
+        // interrupted again and must abandon the fiber.
+
+        try {
+            return currentFiberData.queue.pop(context);
+        } catch (RaiseException re) {
+            handleExceptionDuringExchange(context, currentFiberData, targetFiberData, re);
+
+            // if we get here, we forwarded exception so try once more
+            return currentFiberData.queue.pop(context);
+        } finally {
+            // MRI: fiber_switch re-reads the current fiber; control can return into a different one
+            if (currentFiberData.blocking) context.getFiberCurrentThread().incrementBlocking();
+
+            context.trace(RubyEvent.FIBER_SWITCH, "resume", context.runtime.getFiber());
+        }
+    }
+
+    /**
+     * Handle exceptions raised while exchanging data with a fiber.
+     *
+     * The rules work like this:
+     *
+     * <ul>
+     *     <li>If the thread has called Fiber#resume on the fiber and an interrupt is sent to the thread,
+     *     forward it to the fiber</li>
+     *     <li>If the fiber has called Fiber.yield and an interrupt is sent to the fiber (e.g. Timeout.timeout(x) { Fiber.yield })
+     *     forward it to the fiber's parent thread.</li>
+     * </ul>
+     *
+     * @param context
+     * @param currentFiberData
+     * @param targetFiberData
+     * @param re
+     */
+    private static void handleExceptionDuringExchange(ThreadContext context, FiberData currentFiberData, FiberData targetFiberData, RaiseException re) {
+        // If we received a LJC we need to bubble it out
+        if (context.runtime.getLocalJumpError().isInstance(re.getException())) {
+            throw re;
+        }
+
+        // If we were trying to yield but our queue has been shut down,
+        // let the exception bubble out and (ideally) kill us.
+        if (currentFiberData.queue.isShutdown()) {
+            throw re;
+        }
+
+        // re-raise if the target fiber has been shut down
+        if (targetFiberData.queue.isShutdown()) {
+            throw re;
+        }
+
+        // Otherwise, we want to forward the exception to the target fiber
+        // since it has the ball
+        final ThreadFiber fiber = targetFiberData.fiber.get();
+        final RubyThread fiberThread = fiber == null ? null : fiber.thread;
+        if ( fiberThread != null && fiber.alive() ) {
+            fiberThread.raise(re.getException());
+        } else {
+            // target fiber has gone away, it's our ball now
+            throw re;
+        }
+    }
+
+    @JRubyMethod(rest = true)
+    public IRubyObject transfer(ThreadContext context, IRubyObject[] values) {
+        Ruby runtime = context.runtime;
+
+        final FiberData data = this.data;
+        if (data.resumingFiber != null) throw runtime.newFiberError("attempt to transfer to a resuming fiber");
+        if (data.yielding) throw runtime.newFiberError("attempt to transfer to a yielding fiber");
+        
+        if (!alive()) throw runtime.newFiberError("dead fiber called");
+        
+        FiberData currentFiberData = context.getFiber().data;
+        
+        if (data == currentFiberData) {
+            switch (values.length) {
+                case 0: return context.nil;
+                case 1: return values[0];
+                default: return RubyArray.newArrayMayCopy(runtime, values);
+            }
+        }
+        
+        FiberRequest val;
+        switch (values.length) {
+            case 0: val = NEVER; break;
+            case 1: val = new FiberRequest(values[0], RequestType.DATA); break;
+            default: val = new FiberRequest(RubyArray.newArrayMayCopy(runtime, values), RequestType.DATA);
+        }
+        
+        if (data.parent != context.getFiberCurrentThread()) fiberCalledAcrossThreads(runtime);
+
+        // MRI: transfer establishes no resume relationship, so prev is left alone on both sides
+        currentFiberData.transferred = true;
+        data.transferredTo = true;
+
+        FiberRequest result;
+        try {
+            result = exchangeWithFiber(context, currentFiberData, data, val);
+        } finally {
+            currentFiberData.transferred = false;
+        }
+
+        if (result.type == RequestType.RAISE) {
+            throw (RuntimeException) result.data;
+        }
+
+        return processResultData(context, result);
+    }
+
+    public IRubyObject raise(ThreadContext context, IRubyObject exception) {
+        Ruby runtime = context.runtime;
+
+        if (!alive()) throw runtime.newFiberError("dead fiber called");
+        if (!data.started) throw runtime.newFiberError("cannot raise exception on unborn fiber");
+
+        FiberData currentFiberData = context.getFiber().data;
+
+        if (data == currentFiberData) {
+            RubyKernel.raise(context, this, exception);
+        }
+
+        final FiberData data = this.data;
+        if (data.prev != null) throw runtime.newFiberError("double resume");
+
+        if (data.parent != context.getFiberCurrentThread()) fiberCalledAcrossThreads(runtime);
+
+        RubyException rubyException = (RubyException) exception;
+        rubyException.prepareBacktrace(context);
+        FiberRequest val = new FiberRequest(rubyException.toThrowable(), RequestType.RAISE);
+
+        // like resume, this hands control over, so track both ends
+        ThreadFiber currentFiber = context.getFiber();
+        data.prev = currentFiber;
+        currentFiber.data.resumingFiber = this;
+
+        FiberRequest result = null;
+        try {
+            result = exchangeWithFiber(context, currentFiberData, data, val);
+        } finally {
+            data.prev = null;
+            currentFiber.data.resumingFiber = null;
+        }
+
+        if (result.type == RequestType.RAISE) {
+            throw (RuntimeException) result.data;
+        }
+
+        return processResultData(context, result);
+    }
+    
+    @JRubyMethod(meta = true)
+    public static IRubyObject yield(ThreadContext context, IRubyObject recv) {
+        return ThreadFiber.yield(context, recv, context.nil);
+    }
+    
+    @JRubyMethod(meta = true)
+    public static IRubyObject yield(ThreadContext context, IRubyObject recv, IRubyObject value) {
+        Ruby runtime = context.runtime;
+
+        return exchangeWithPrevFiber(context, runtime, new FiberRequest(value, RequestType.DATA));
+    }
+
+    // MRI: fiber_switch with yielding set, which lets Fiber#transfer reject us as a target
+    private static IRubyObject exchangeWithPrevFiber(ThreadContext context, Ruby runtime, FiberRequest request) {
+        FiberData currentFiberData = verifyCurrentFiber(context, runtime);
+
+        ThreadFiber prev = currentFiberData.prev;
+        FiberData prevFiberData = prev == null ? null : prev.data;
+        if (prevFiberData == null) throw runtime.newFiberError("attempt to yield on a not resumed fiber");
+
+        FiberRequest result;
+        currentFiberData.yielding = true;
+        try {
+            result = exchangeWithFiber(context, currentFiberData, prevFiberData, request);
+        } finally {
+            currentFiberData.yielding = false;
+        }
+
+        if (result.type == RequestType.RAISE) {
+            throw (RuntimeException) result.data;
+        }
+
+        return processResultData(context, result);
+    }
+
+    private static IRubyObject processResultData(ThreadContext context, FiberRequest result) {
+        IRubyObject data = (IRubyObject) result.data;
+
+        if (data == RubyBasicObject.NEVER) return context.nil;
+
+        return data;
+    }
+
+    @JRubyMethod(meta = true, rest = true)
+    public static IRubyObject yield(ThreadContext context, IRubyObject recv, IRubyObject[] value) {
+        switch (value.length) {
+            case 0: return ThreadFiber.yield(context, recv);
+            case 1: return ThreadFiber.yield(context, recv, value[0]);
+        }
+
+        Ruby runtime = context.runtime;
+
+        return exchangeWithPrevFiber(context, runtime, new FiberRequest(RubyArray.newArrayNoCopy(runtime, value), RequestType.DATA));
+    }
+
+    private static FiberData verifyCurrentFiber(ThreadContext context, Ruby runtime) {
+        FiberData currentFiberData = context.getFiber().data;
+
+        if (currentFiberData.parent == null) throw runtime.newFiberError("can't yield from root fiber");
+
+        if (currentFiberData.queue.isShutdown()) throw runtime.newFiberError("dead fiber yielded");
+        return currentFiberData;
+    }
+
+    private void setSourceLocation(Block block) {
+        if (block.getBody().getFile() instanceof String file) {
+            this.file = file;
+            this.line = block.getBody().getLine() + 1;
+        }
+    }
+
+    // MRI: fiber_status_name
+    private String status(ThreadContext context) {
+        FiberData fiberData = this.data;
+
+        if (fiberData == null || !alive()) return "terminated";
+        if (context.getFiber() == this) return "resumed";
+        if (fiberData.resumingFiber != null) return "suspended by resuming";
+        if (!fiberData.started) return "created";
+
+        return "suspended";
+    }
+
+    @JRubyMethod(name = "to_s", alias = "inspect")
+    public IRubyObject to_s(ThreadContext context) {
+        RubyString string = inspectPrefix(context, type(), inspectHashCode());
+
+        if (file != null) string.catStringUnsafe(" " + file + ":" + line);
+
+        string.catStringUnsafe(" (" + status(context) + ")>");
+
+        return string;
+    }
+
+    @JRubyMethod(name = "alive?")
+    public IRubyObject alive_p(ThreadContext context) {
+        return asBoolean(context, alive());
+    }
+    
+    @JRubyMethod(meta = true)
+    public static IRubyObject current(ThreadContext context, IRubyObject recv) {
+        return context.getFiber();
+    }
+
+    @Override
+    public Map<Object, IRubyObject> getContextVariables() {
+        return thread.getContextVariables();
+    }
+    
+    final boolean alive() {
+        RubyThread thread = this.thread;
+        FiberData data = this.data;
+        if (thread == null || data == null || !thread.isAlive() || data.queue.isShutdown()) {
+            return false;
+        }
+
+        return true;
+    }
+    
+    // MRI: return_fiber. A fiber entered by Fiber#transfer has no resumer, so control returns to the
+    // innermost fiber in this thread's resume chain, or null when nobody is left to hand it to.
+    private static ThreadFiber returnFiber(FiberData data) {
+        ThreadFiber prev = data.prev;
+        if (prev != null) return prev;
+
+        ThreadContext parentContext = data.parent.getContext();
+        if (parentContext == null) return null;
+
+        ThreadFiber fiber = parentContext.getRootFiber();
+        if (fiber == null) return null;
+
+        while (true) {
+            FiberData fiberData = fiber.data;
+            if (fiberData == null) return null;
+
+            ThreadFiber resuming = fiberData.resumingFiber;
+            if (resuming == null) {
+                // only hand over if it is parked in a transfer; an async kill can leave nobody waiting
+                return fiberData.transferred ? fiber : null;
+            }
+
+            fiber = resuming;
+        }
+    }
+
+    // forward a control-flow exception to whoever regains control, if it is still around
+    private static void raiseInReturnFiber(FiberData data, IRubyObject exception) {
+        ThreadFiber target = returnFiber(data);
+        if (target == null) return;
+
+        RubyThread thread = target.thread;
+        if (thread != null) thread.raise(exception);
+    }
+
+    // hand a result back to whoever regains control, if it is still around
+    private static void pushToReturnFiber(ThreadContext context, FiberData data, FiberRequest request) {
+        ThreadFiber target = returnFiber(data);
+        if (target == null) return;
+
+        FiberData targetData = target.data;
+        if (targetData != null) targetData.queue.push(context, request);
+    }
+
+    static RubyThread createThread(ThreadContext context, final FiberData data, final FiberQueue queue, final Block block) {
+        final AtomicReference<RubyThread> fiberThread = new AtomicReference();
+
+        // retry with GC once
+        boolean retried = false;
+
+        while (!retried) {
+            try {
+                FIBER_LAUNCHER.accept(context.runtime, () -> {
+                    ThreadContext ctxt = context.runtime.getCurrentContext();
+                    ctxt.setFiber(data.fiber.get());
+                    ctxt.useRecursionGuardsFrom(data.parent.getContext());
+                    RubyThread rubyThread = ctxt.getThread();
+                    fiberThread.set(rubyThread);
+                    rubyThread.setFiberCurrentThread(data.parent);
+
+                    Thread thread = Thread.currentThread();
+                    String oldName = thread.getName();
+                    thread.setName("Fiber thread for block at: " + block.getBody().getFile() + ":" + block.getBody().getLine());
+
+                    try {
+                        FiberRequest init = data.queue.pop(ctxt);
+                        data.started = true;
+
+                        // MRI: rb_fiber_start. A first run does not return through a switch
+                        if (data.blocking) data.parent.incrementBlocking();
+
+                        // Whether we already gave up our blocking-count contribution
+                        boolean handedBack = false;
+
+                        ctxt.trace(RubyEvent.FIBER_SWITCH, null, null, null, 0);
+
+                        try {
+                            FiberRequest result;
+
+                            if (init == NEVER) {
+                                result = new FiberRequest(block.yieldSpecific(ctxt), RequestType.DATA);
+                            } else {
+                                // terminated before first resume
+                                if (init.type == RequestType.RAISE) {
+                                    throw (RuntimeException) init.data;
+                                }
+
+                                result = new FiberRequest(block.yieldArray(ctxt, (IRubyObject) init.data, null), RequestType.DATA);
+                            }
+
+                            // Clear ThreadFiber's thread since we're on the way out and need to appear non-alive?
+                            // Waiting thread can proceed immediately after push below but before we are truly dead.
+                            // See https://github.com/jruby/jruby/issues/4838
+                            ThreadFiber tf = data.fiber.get();
+                            if (tf != null) tf.thread = null;
+
+                            // MRI: rb_fiber_terminate, which switches away. Decrement before handing back
+                            if (data.blocking) data.parent.decrementBlocking();
+                            handedBack = true;
+
+                            pushToReturnFiber(ctxt, data, result);
+                        } finally {
+                            // MRI: rb_fiber_terminate, for raise, kill or flow control
+                            if (!handedBack && data.blocking) data.parent.decrementBlocking();
+
+                            // Ensure we do everything for shutdown now
+                            data.queue.shutdown();
+                            context.runtime.getThreadService().unregisterCurrentThread(ctxt);
+                            ThreadFiber tf = data.fiber.get();
+                            if (tf != null) tf.thread = null;
+                        }
+                    } catch (FiberKill fk) {
+                        // push a final result and quietly die
+                        pushToReturnFiber(ctxt, data, new FiberRequest(ctxt.nil, RequestType.DATA));
+                    } catch (JumpException.FlowControlException fce) {
+                        raiseInReturnFiber(data, fce.buildException(context.runtime).getException());
+                    } catch (IRBreakJump bj) {
+                        // This is one of the rare cases where IR flow-control jumps
+                        // leaks into the runtime impl.
+                        raiseInReturnFiber(data, ((RaiseException) IRException.BREAK_LocalJumpError.getException(context.runtime)).getException());
+                    } catch (IRReturnJump rj) {
+                        // This is one of the rare cases where IR flow-control jumps
+                        // leaks into the runtime impl.
+                        raiseInReturnFiber(data, ((RaiseException) IRException.RETURN_LocalJumpError.getException(context.runtime)).getException());
+                    } catch (RaiseException re) {
+                        pushToReturnFiber(ctxt, data, new FiberRequest(re.getException().toThrowable(), RequestType.RAISE));
+                    } catch (Throwable t) {
+                        raiseInReturnFiber(data, JavaUtil.convertJavaToUsableRubyObject(context.runtime, t));
+                    } finally {
+                        thread.setName(oldName);
+                    }
+                });
+
+                // Successfully submitted to executor, break out of retry loop
+                break;
+            } catch (OutOfMemoryError oome) {
+                oome.printStackTrace();
+                String oomeMessage = oome.getMessage();
+                if (!retried && oomeMessage != null && oomeMessage.contains("unable to create new native thread")) {
+                    // try to clean out stale enumerator threads by forcing GC
+                    System.gc();
+                    retried = true;
+                } else {
+                    throw oome;
+                }
+            }
+        }
+        
+        while (fiberThread.get() == null) { Thread.yield(); }
+        
+        return fiberThread.get();
+    }
+
+    @JRubyMethod(visibility = Visibility.PRIVATE)
+    public IRubyObject __finalize__(ThreadContext context) {
+        try {
+            doFinalize();
+        } catch (Exception ignore) { return context.fals; }
+        return context.nil;
+    }
+
+    private void doFinalize() {
+        FiberData data = this.data;
+        this.data = null;
+        if (data != null) {
+            // we never interrupt or shutdown root fibers
+            if (data.parent == null) return;
+
+            data.queue.shutdown();
+        }
+
+        RubyThread thread = this.thread;
+        this.thread = null;
+        if (thread != null) {
+            thread.dieFromFinalizer();
+
+            // interrupt Ruby thread to break out of queue sleep, blocking IO
+            thread.interrupt();
+
+            // null out references to aid GC
+            data = null; thread = null;
+        }
+    }
+
+    @Override
+    protected void finalize() throws Throwable {
+        try {
+            doFinalize();
+        } finally {
+            super.finalize();
+        }
+    }
+
+    @JRubyMethod(name = "blocking?")
+    public IRubyObject blocking_p(ThreadContext context) {
+        return asBoolean(context, isBlocking());
+    }
+
+    @JRubyMethod(name = "blocking?", meta = true)
+    public static IRubyObject blocking_p_s(ThreadContext context, IRubyObject self) {
+        boolean blocking = context.getFiber().isBlocking();
+        if (!blocking) return context.fals;
+
+        return RubyFixnum.one(context.runtime);
+    }
+
+    @JRubyMethod(name = "blocking", meta = true)
+    public static IRubyObject blocking(ThreadContext context, IRubyObject self, Block block) {
+        ThreadFiber currentFiber = context.getFiber();
+        boolean blocking = currentFiber.isBlocking();
+
+        // If we are already blocking, this is essentially a no-op:
+        if (currentFiber.isBlocking()) {
+            return block.yieldSpecific(context, currentFiber);
+        }
+
+        try {
+            assert !currentFiber.isBlocking() : "fiber was blocking when it should not have been";
+
+            currentFiber.data.blocking = true;
+
+            // Once the fiber is blocking, and current, we increment the thread blocking state:
+            context.getFiberCurrentThread().incrementBlocking();
+
+            return block.yieldSpecific(context, currentFiber);
+        } finally {
+            // We are no longer blocking:
+            currentFiber.data.blocking = false;
+            context.getFiberCurrentThread().decrementBlocking();
+        }
+    }
+
+    @JRubyMethod(name = "backtrace")
+    public IRubyObject backtrace(ThreadContext context) {
+        return backtrace(context, null, null);
+    }
+
+    @JRubyMethod(name = "backtrace")
+    public IRubyObject backtrace(ThreadContext context, IRubyObject level) {
+        return backtrace(context, level, null);
+    }
+
+    @JRubyMethod(name = "backtrace")
+    public IRubyObject backtrace(ThreadContext context, IRubyObject level, IRubyObject length) {
+        ThreadFiber threadFiber = data.fiber.get();
+
+        if (threadFiber == null) return context.nil;
+
+        return threadFiber.thread.backtrace(context, level, length);
+    }
+
+    @JRubyMethod(name = "backtrace_locations")
+    public IRubyObject backtrace_locations(ThreadContext context) {
+        return backtrace_locations(context, null, null);
+    }
+
+    @JRubyMethod(name = "backtrace_locations")
+    public IRubyObject backtrace_locations(ThreadContext context, IRubyObject level) {
+        return backtrace_locations(context, level, null);
+    }
+
+    @JRubyMethod(name = "backtrace_locations")
+    public IRubyObject backtrace_locations(ThreadContext context, IRubyObject level, IRubyObject length) {
+        ThreadFiber threadFiber = data.fiber.get();
+
+        if (threadFiber == null) return context.nil;
+
+        return threadFiber.thread.backtrace_locations(context, level, length);
+    }
+
+    @JRubyMethod(name = "[]", meta = true)
+    public static IRubyObject op_aref(ThreadContext context, IRubyObject recv, IRubyObject key) {
+        key = RubySymbol.toSymbol(context, key);
+
+        RubyHash storage = context.getFiber().storage;
+
+        if (storage == null) return context.nil;
+
+        IRubyObject value = storage.op_aref(context, key);
+
+        if (value == null) return context.nil;
+
+        return value;
+    }
+
+    @JRubyMethod(name = "[]=", meta = true)
+    public static IRubyObject op_aset(ThreadContext context, IRubyObject recv, IRubyObject key, IRubyObject value) {
+        key = RubySymbol.toSymbol(context, key);
+
+        ThreadFiber current = context.getFiber();
+        boolean nil = value.isNil();
+        RubyHash storage = current.storage;
+
+        if (storage == null) {
+            if (nil) return context.nil;
+
+            current.storage = storage = newHash(context);
+        }
+
+        if (nil) {
+            storage.delete(context, key);
+        } else {
+            storage.op_aset(context, key, value);
+        }
+
+        return value;
+    }
+
+    @JRubyMethod
+    public IRubyObject storage(ThreadContext context) {
+        checkSameFiber(context);
+
+        RubyHash storage = this.storage;
+
+        if (storage == null) {
+            return context.nil;
+        }
+
+        return storage.dup(context);
+    }
+
+    private void checkSameFiber(ThreadContext context) {
+        if (context.getFiber() != this) {
+            throw argumentError(context, "Fiber storage can only be accessed from the Fiber it belongs to");
+        }
+    }
+
+    @JRubyMethod(name = "storage=")
+    public IRubyObject storage_set(ThreadContext context, IRubyObject hash) {
+        warnExperimental(context, "Fiber#storage= is experimental and may be removed in the future!");
+        checkSameFiber(context);
+
+        setStorage(context, hash);
+
+        return hash;
+    }
+
+    private void setStorage(ThreadContext context, IRubyObject hash) {
+        validateStorage(context, hash);
+        this.storage = hash.isNil() ? null : (RubyHash) hash.dup(context);
+    }
+
+    private static void validateStorage(ThreadContext context, IRubyObject hashArg) {
+        // nil is an allowed value and will be lazily initialized.
+        if (hashArg == context.nil) return;
+
+        var hash = castAsHash(context, hashArg, "storage must be a Hash");
+        if (hash.isFrozen()) throw frozenError(context, hash, "storage must not be frozen");
+
+        hash.visitAll(context, (ctx, self, key, value, index) -> {
+            if (!(key instanceof RubySymbol)) throw typeError(context, key, "Symbol");
+        });
+    }
+
+    @JRubyMethod
+    public IRubyObject kill(ThreadContext context) {
+        if (root) return this;
+
+        if (context.getFiber() == this) {
+            throw new FiberKill();
+        }
+
+        FiberData fiberData = this.data;
+        if (fiberData == null) return this;
+
+        // MRI: a second kill answers false, while a fiber that ran to completion still answers itself.
+        // Both are dead by the time we get here, so only the flag separates them and it has to be
+        // read before alive(), which would otherwise claim both as the completed case.
+        if (fiberData.killed) return context.fals;
+
+        // MRI: killing a dead fiber does nothing, and an unborn one has no thread of its own to check
+        if (!alive()) return this;
+        if (fiberData.started && fiberData.parent != context.getFiberCurrentThread()) fiberCalledAcrossThreads(context.runtime);
+
+        // mark before the push, which can block, so a second kill cannot slip in behind it
+        fiberData.killed = true;
+        fiberData.queue.push(context, new FiberRequest(new FiberKill(), RequestType.RAISE));
+
+        return this;
+    }
+
+    public static class FiberSchedulerSupport {
+        // MRI: rb_fiber_s_schedule_kw and rb_fiber_s_schedule, kw passes on context
+        @JRubyMethod(name = "schedule", meta = true, rest = true, keywords = true)
+        public static IRubyObject schedule(ThreadContext context, IRubyObject self, IRubyObject[] args, Block block) {
+            IRubyObject scheduler = context.getFiberCurrentThread().getScheduler();
+            if (scheduler.isNil()) throw runtimeError(context, "No scheduler is available!");
+            return scheduler.callMethod(context, "fiber", args, block);
+        }
+
+        // MRI: rb_fiber_s_scheduler
+        @JRubyMethod(name = "scheduler", meta = true)
+        public static IRubyObject get_scheduler(ThreadContext context, IRubyObject self) {
+            return context.getFiberCurrentThread().getScheduler();
+        }
+
+        // MRI: rb_fiber_current_scheduler
+        @JRubyMethod(name = "current_scheduler", meta = true)
+        public static IRubyObject current_scheduler(ThreadContext context, IRubyObject self) {
+            return context.getFiberCurrentThread().getSchedulerCurrent();
+        }
+
+        // MRI: rb_fiber_set_scheduler
+        @JRubyMethod(name = "set_scheduler", meta = true)
+        public static IRubyObject set_scheduler(ThreadContext context, IRubyObject self, IRubyObject scheduler) {
+            return context.getFiberCurrentThread().setFiberScheduler(context, scheduler);
+        }
+    }
+
+    public FiberData getData() {
+        return data;
+    }
+
+    public RubyThread getThread() {
+        return thread;
+    }
+    
+    public static class FiberData {
+        FiberData(FiberQueue queue, RubyThread parent, ThreadFiber fiber, boolean blocking) {
+            this.queue = queue;
+            this.parent = parent;
+            this.fiber = new WeakReference<ThreadFiber>(fiber);
+            this.blocking = blocking;
+        }
+
+        public ThreadFiber getPrev() {
+            return prev;
+        }
+        
+        final FiberQueue queue;
+        // the fiber that resumed us, never set by transfer. MRI: fiber->prev
+        volatile ThreadFiber prev;
+        // the fiber we resumed, if any. MRI: fiber->resuming_fiber
+        volatile ThreadFiber resumingFiber;
+        final RubyThread parent;
+        final WeakReference<ThreadFiber> fiber;
+        // parked inside our own Fiber#transfer, waiting for control to come back
+        volatile boolean transferred;
+        // entered by Fiber#transfer and so can never be resumed
+        volatile boolean transferredTo;
+        // parked inside Fiber.yield. MRI: fiber->yielding
+        volatile boolean yielding;
+        // our block has begun running. MRI: status != FIBER_CREATED
+        volatile boolean started;
+        // Fiber#kill has been delivered. MRI: fiber->killed
+        volatile boolean killed;
+        volatile boolean blocking;
+    }
+    
+    volatile FiberData data;
+    volatile RubyThread thread;
+    String file;
+    int line;
+    RubyHash storage;
+    final boolean root;
+}

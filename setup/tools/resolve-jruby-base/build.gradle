@@ -1,0 +1,10 @@
+// Copies org.jruby:jruby-base (UNSHADED jruby core) + its runtime deps into ../../jars/jruby-base-deps
+plugins { id 'base' }
+repositories { mavenCentral() }
+configurations { jr }
+dependencies { jr 'org.jruby:jruby-base:10.1.2.0' }
+tasks.register('copyDeps', Copy) {
+  from configurations.jr
+  into "${projectDir}/../../jars/jruby-base-deps"
+}
+tasks.register('listDeps') { doLast { configurations.jr.resolvedConfiguration.resolvedArtifacts.each { println it.moduleVersion.id } } }
