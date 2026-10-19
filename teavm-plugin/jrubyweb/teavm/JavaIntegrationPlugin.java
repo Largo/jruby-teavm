@@ -20,6 +20,12 @@ import org.teavm.vm.spi.TeaVMPlugin;
  *     class behind Collections.EMPTY_LIST, is null. JRuby builds a proxy (and its Ruby name) for the enclosing class
  *     of every proxied nested class. TeaVM's own runtime classes (org.teavm.*) are left out: their nested classes
  *     must never become reachable through reflection (wasm-gc maps some of them to JS references).</li>
+ * <li>The types a {@code ReferenceQueue} hands out. TeaVM 0.16.0's own listener for this
+ *     (WeakReferenceDependencyListener) makes a new node on every method it sees and connects the queue argument
+ *     instead of the reference, so to the analysis {@code poll()} returns nothing: a method that is only called on
+ *     polled references (JRuby's ObjectProxyCache calls {@code EntryRef.hash()} so) is left out of the class, and
+ *     the first expunge after a JS garbage collection fails with "TypeError: d.bfq is not a function". Here every
+ *     reference made with a queue flows into what {@code poll()}/{@code remove()} return.</li>
  * <li>Records the target for {@link JavaClassesPolicy}: native class-library methods with a generated body can be
  *     called reflectively on JavaScript only.</li>
  * </ul>
@@ -32,6 +38,31 @@ public class JavaIntegrationPlugin implements TeaVMPlugin {
         javaScript = host.getExtension(TeaVMJavaScriptHost.class) != null;
         host.add(new MethodReference(Class.class, "getEnclosingClass", Class.class), new Owner(true));
         host.add(new MethodReference(Class.class, "getDeclaringClass", Class.class), new Owner(false));
+        host.add(new QueuedReferences());
+    }
+
+    private static final class QueuedReferences extends org.teavm.dependency.AbstractDependencyListener {
+        private org.teavm.dependency.DependencyNode references;
+
+        @Override
+        public void started(DependencyAgent agent) {
+            references = agent.createNode();
+        }
+
+        @Override
+        public void methodReached(DependencyAgent agent, MethodDependency method) {
+            MethodReference ref = method.getReference();
+            String owner = ref.getClassName();
+            String name = ref.getName();
+            boolean reference = owner.equals("java.lang.ref.WeakReference") || owner.equals("java.lang.ref.SoftReference")
+                    || owner.equals("java.lang.ref.PhantomReference");
+            if (reference && name.equals("<init>") && ref.parameterCount() == 2) {
+                method.getVariable(0).connect(references);
+            } else if (owner.equals("java.lang.ref.ReferenceQueue") && (name.equals("poll") || name.equals("remove"))
+                    && method.getResult() != null) {
+                references.connect(method.getResult());
+            }
+        }
     }
 
     private static final class Owner implements DependencyPlugin {

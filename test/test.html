@@ -29,6 +29,9 @@ try {
   const cases = (await (await fetch('cases.json')).json()).filter(c => !(skipBlocking && c.blocking));
   const results = [];
   for (const c of cases) {
+    // an idle gap first (ms), as between a person's evaluations: the garbage collector and its
+    // FinalizationRegistry callbacks run then, which back-to-back cases never let happen
+    if (c.delay) await new Promise(ok => setTimeout(ok, c.delay));
     const t = performance.now();
     const r = await Promise.race([evalOne(c.code), new Promise(ok => setTimeout(() => ok({out: '', result: null, error: 'timeout (30 s)'}), 30000))]);
     r.ms = Math.round(performance.now() - t);

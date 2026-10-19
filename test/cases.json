@@ -322,5 +322,23 @@
   "name": "visual: Canvas2D without a canvas",
   "code": "Java::Demo::Canvas2D.new(\"no-such-canvas\")",
   "error_re": "^Java::JavaLang::IllegalArgumentException: no <canvas id=\"no-such-canvas\"> in the page"
+ },
+ {
+  "name": "java: proxies after an idle gap (1)",
+  "code": "java.util.ArrayList.__persistent__ = true\n2000.times { java.util.ArrayList.new.tap { |l| l.add(1) }.singleton_class }\nx = []; 3000.times { x << java.util.HashMap.new }\nputs \"ok\"",
+  "out": "ok\n",
+  "delay": 500
+ },
+ {
+  "name": "java: proxies after an idle gap (2)",
+  "code": "java.util.ArrayList.__persistent__ = true\n2000.times { java.util.ArrayList.new.tap { |l| l.add(1) }.singleton_class }\nx = []; 3000.times { x << java.util.HashMap.new }\nputs \"ok\"",
+  "out": "ok\n",
+  "delay": 500
+ },
+ {
+  "name": "java: proxies after an idle gap (3)",
+  "code": "java.util.ArrayList.__persistent__ = true\n2000.times { java.util.ArrayList.new.tap { |l| l.add(1) }.singleton_class }\nx = []; 3000.times { x << java.util.HashMap.new }\nputs \"ok\"",
+  "out": "ok\n",
+  "delay": 500
  }
 ]

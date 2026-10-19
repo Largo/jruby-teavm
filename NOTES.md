@@ -172,6 +172,20 @@ Visual demo (branch `visual`: `web/visual.html`, `demo.Canvas2D`, JBox2D, ZXing)
 27. Running a snippet again redefines its constants (`SCALE`, `Look`), which prints "warning: already initialized
     constant" into the output -> `visual.html` sets `$VERBOSE = nil` once after boot.
 
+Found later, by the chunkybacon course (pages left open between evaluations):
+
+28. TeaVM bug ([konsoletyper/teavm#1331](https://github.com/konsoletyper/teavm/issues/1331)): its
+    `WeakReferenceDependencyListener` makes a new dependency node on every `methodReached` and connects the queue
+    argument of `WeakReference.<init>` instead of the reference, so to the analysis `ReferenceQueue.poll()` returns
+    nothing, and a method called only on polled references is left out of the class. JRuby's
+    `ObjectProxyCache.Segment.expunge` calls `((EntryRef) queue.poll()).hash()`: after a JS garbage collection
+    with Java proxies in the cache, the next evaluation failed with `TypeError: d.bcN is not a function` (29 of 30
+    runs of 2000 singleton-classed Java objects with 400 ms gaps). `ObjectSpace`, `WeakIdentityHashMap`,
+    `WeakValuedMap`, `WeakKeyValueIdentityMap`, `ConcurrentWeakHashMap` and `JarCache` poll the same way ->
+    `JavaIntegrationPlugin.QueuedReferences` connects every Weak/Soft/PhantomReference made with a queue to what
+    `poll()`/`remove()` return. The test cases "java: proxies after an idle gap" wait 500 ms first (`delay` in
+    cases.json): back-to-back cases never give the garbage collector a turn.
+
 ## JRuby source changes, by area (all marked `// TEAVM:`)
 
 **Runtime class generation / JIT (pruned)**: `compiler/*` except small interfaces (`JITCompiler` is an inert

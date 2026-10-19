@@ -119,7 +119,9 @@ How it works:
 * TeaVM fixes needed on the way (all small, see NOTES.md): `Method.invoke`/`Constructor.newInstance` wrap
   exceptions in InvocationTargetException, `Class.getPackage()` without the trailing dot, a JS-runtime default for
   `Class.getDeclaredClasses()` (scripts/teavm.sh), dependency modelling of `getEnclosingClass`/`getDeclaringClass`
-  (`teavm-plugin/.../JavaIntegrationPlugin`), and a few missing JDK methods (`Method.isDefault`,
+  and of what `ReferenceQueue.poll()` returns ([teavm#1331](https://github.com/konsoletyper/teavm/issues/1331):
+  without it JRuby's proxy cache failed after a garbage collection) (`teavm-plugin/.../JavaIntegrationPlugin`),
+  and a few missing JDK methods (`Method.isDefault`,
   `Array.newInstance(Class, int...)`, `ClassLoader.loadClass`, ...).
 
 **Adding a class**: append its binary name to `java-classes.txt` (nested classes with `$`, e.g.
